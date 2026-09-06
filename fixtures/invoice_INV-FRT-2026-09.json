@@ -1,0 +1,25 @@
+{
+  "invoice_number": "INV-FRT-2026-09",
+  "shipment_id": "SHP-88220",
+  "carrier_name": "FedEx Freight",
+  "bill_of_lading": "BOL-US-99121",
+  "line_items": [
+    {
+      "description": "Standard LTL Transit",
+      "amount_cents": 85000,
+      "charge_type": "BASE_FREIGHT"
+    },
+    {
+      "description": "Driver Detention Fee (60 mins)",
+      "amount_cents": 17500,
+      "charge_type": "DETENTION",
+      "billed_minutes": 60
+    },
+    {
+      "description": "Liftgate Delivery Service",
+      "amount_cents": 9500,
+      "charge_type": "LIFTGATE"
+    }
+  ],
+  "total_billed_cents": 112000
+}

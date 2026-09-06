@@ -1,0 +1,3 @@
+shipment_id,carrier,bill_of_lading,mode,agreed_base_rate,allowed_dwell_minutes,detention_rate_per_hour
+SHP-88219,Maersk,BOL-US-99120,OCEAN,4200.00,120,75.00
+SHP-88220,FedEx Freight,BOL-US-99121,LTL,850.00,30,75.00
