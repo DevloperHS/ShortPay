@@ -3,12 +3,16 @@ import asyncio
 import pytest
 
 from shortpay.adapters import invoice_extract
+from pdf_support import make_blank_pdf, make_text_pdf
 from shortpay.adapters.invoice_extract import (
     ExtractionError,
+    MAX_PDF_BYTES,
+    PdfParseError,
     ProviderRequestLimiter,
     SponsorRequestLimitError,
     extract_invoice_with_fallback,
     extract_invoice_with_fallback_details,
+    extract_text_from_pdf,
     parse_invoice_json,
 )
 from shortpay.evidence import ChargeType, InvoiceFact, InvoiceLine
@@ -33,6 +37,36 @@ def reset_provider_request_limit():
     invoice_extract.provider_request_limiter.reset()
     yield
     invoice_extract.provider_request_limiter.reset()
+
+
+def test_pdf_text_extracts_invoice_identifiers():
+    pdf = make_text_pdf(
+        "Carrier: FedEx Freight\n"
+        "Invoice: INV-FRT-2026-09\n"
+        "Shipment: SHP-88220\n"
+        "BOL: BOL-US-99121"
+    )
+    text = extract_text_from_pdf(pdf)
+    assert "INV-FRT-2026-09" in text
+    assert "SHP-88220" in text
+    assert "BOL-US-99121" in text
+
+
+def test_pdf_text_rejects_non_pdf_bytes():
+    with pytest.raises(PdfParseError, match="not a PDF"):
+        extract_text_from_pdf(b"this is not a pdf")
+
+
+def test_pdf_text_rejects_empty_and_oversized_files():
+    with pytest.raises(PdfParseError, match="empty"):
+        extract_text_from_pdf(b"")
+    with pytest.raises(PdfParseError, match="15 MB"):
+        extract_text_from_pdf(b"%PDF-1.4\n" + (b"x" * MAX_PDF_BYTES))
+
+
+def test_pdf_text_rejects_blank_page():
+    with pytest.raises(PdfParseError, match="No readable invoice text"):
+        extract_text_from_pdf(make_blank_pdf())
 
 
 def test_parse_invoice_fixture_uses_integer_cents():

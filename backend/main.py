@@ -1,7 +1,7 @@
 import os
 from typing import List, Dict, Any
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 
@@ -11,7 +11,10 @@ from shortpay.adapters.dock_log import parse_dock_log_json
 from shortpay.adapters.facility_master import parse_facility_json
 from shortpay.adapters.invoice_extract import (
     ExtractionError,
+    ExtractionOutcome,
+    PdfParseError,
     extract_invoice_with_fallback_details,
+    extract_text_from_pdf,
     parse_invoice_json,
 )
 from shortpay.adapters.erp_propose import build_dispute_packet, build_erp_proposal
@@ -109,6 +112,46 @@ def trigger_ingest():
     return {"status": "success", "message": "Fixtures ingested successfully"}
 
 
+def _match_extracted_invoice(
+    outcome: ExtractionOutcome,
+    auto_match: bool,
+    workflow,
+) -> Dict[str, Any]:
+    office.ingest(
+        [outcome.fact],
+        source=f"{outcome.provider}:{outcome.model_name}",
+    )
+    response: Dict[str, Any] = {
+        "status": "success",
+        "provider": outcome.provider,
+        "model": outcome.model_name,
+        "invoice_id": outcome.fact.invoice_id,
+        "shipment_id": outcome.fact.shipment_id,
+        "billed_cents": outcome.fact.total_billed_cents,
+    }
+    workflow.set_attribute(
+        "shortpay.trace_id",
+        f"trace-freight-{outcome.fact.shipment_id.lower()}",
+    )
+    if auto_match:
+        case = office.match(
+            CaseKey(
+                invoice_id=outcome.fact.invoice_id,
+                shipment_id=outcome.fact.shipment_id,
+            ),
+            emit_trace=False,
+        )
+        response.update(
+            {
+                "expected_cents": case.match_result.expected_total_cents,
+                "dispute_cents": case.match_result.dispute_total_cents,
+                "disposition": case.disposition.disposition_type,
+            }
+        )
+    workflow.set_output(response)
+    return response
+
+
 @app.post("/api/ingest/invoice")
 def ingest_invoice_through_sponsors(req: SponsorInvoiceIngestRequest) -> Dict[str, Any]:
     """Extract a real invoice through TensorMux/Groq, then run deterministic matching."""
@@ -122,41 +165,43 @@ def ingest_invoice_through_sponsors(req: SponsorInvoiceIngestRequest) -> Dict[st
     ) as workflow:
         try:
             outcome = extract_invoice_with_fallback_details(req.raw_invoice_text)
-            office.ingest(
-                [outcome.fact],
-                source=f"{outcome.provider}:{outcome.model_name}",
-            )
+            return _match_extracted_invoice(outcome, req.auto_match, workflow)
+        except ExtractionError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invoice extracted, but matching evidence is incomplete: {exc}",
+            ) from exc
 
-            response: Dict[str, Any] = {
-                "status": "success",
-                "provider": outcome.provider,
-                "model": outcome.model_name,
-                "invoice_id": outcome.fact.invoice_id,
-                "shipment_id": outcome.fact.shipment_id,
-                "billed_cents": outcome.fact.total_billed_cents,
-            }
-            workflow.set_attribute(
-                "shortpay.trace_id",
-                f"trace-freight-{outcome.fact.shipment_id.lower()}",
-            )
 
-            if req.auto_match:
-                case = office.match(
-                    CaseKey(
-                        invoice_id=outcome.fact.invoice_id,
-                        shipment_id=outcome.fact.shipment_id,
-                    ),
-                    emit_trace=False,
-                )
-                response.update(
-                    {
-                        "expected_cents": case.match_result.expected_total_cents,
-                        "dispute_cents": case.match_result.dispute_total_cents,
-                        "disposition": case.disposition.disposition_type,
-                    }
-                )
-            workflow.set_output(response)
-            return response
+@app.post("/api/ingest/invoice-pdf")
+def ingest_invoice_pdf(
+    invoice_pdf: UploadFile = File(...),
+    auto_match: bool = True,
+) -> Dict[str, Any]:
+    """Parse a carrier PDF, extract billed facts, then run deterministic matching."""
+    filename = invoice_pdf.filename or "invoice.pdf"
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="PDF only")
+
+    pdf_bytes = invoice_pdf.file.read()
+    with tracer.workflow(
+        "match_evidence",
+        trace_id="trace-freight-invoice-pdf-ingest",
+        input_value={
+            "filename": filename,
+            "bytes": len(pdf_bytes),
+            "auto_match": auto_match,
+        },
+    ) as workflow:
+        try:
+            invoice_text = extract_text_from_pdf(pdf_bytes)
+            workflow.set_attribute("shortpay.pdf_chars", len(invoice_text))
+            outcome = extract_invoice_with_fallback_details(invoice_text)
+            return _match_extracted_invoice(outcome, auto_match, workflow)
+        except PdfParseError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ExtractionError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except KeyError as exc:
