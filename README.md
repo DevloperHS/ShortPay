@@ -35,8 +35,8 @@ Clone the repository and set up a Python virtual environment:
 
 ```bash
 # Clone the repository
-git clone https://github.com/shubhu121/pstack-prd.git
-cd pstack-prd
+git clone https://github.com/DevloperHS/parakh.git
+cd parakh
 
 # Create and activate virtual environment
 python -m venv .venv
@@ -99,7 +99,7 @@ $env:PYTHONPATH="backend"; pytest --live-sponsors backend/tests
 
 ## 🌐 Launching the REST API Server
 
-Launch the FastAPI Uvicorn server (CORS is enabled for Next.js frontend on `http://localhost:3000`):
+Launch the FastAPI backend:
 
 ```bash
 # Run from project root
@@ -107,6 +107,14 @@ Launch the FastAPI Uvicorn server (CORS is enabled for Next.js frontend on `http
 ```
 
 The server will automatically auto-ingest baseline fixtures on startup and serve API documentation at `http://localhost:8000/docs`.
+
+Launch the Flask UI in a second terminal:
+
+```bash
+.venv\Scripts\python.exe -m frontend
+```
+
+The UI is available at `http://localhost:5000` and connects to the FastAPI backend on port 8000.
 
 ---
 
@@ -146,3 +154,9 @@ The server will automatically auto-ingest baseline fixtures on startup and serve
   - Total Billed: **$1,120.00** (`112000`¢)
   - Authorized Payable: **$925.00** (`92500`¢)
   - Dispute Amount: **$195.00** (`19500`¢)
+
+---
+
+## Repository description
+
+Evidence-backed freight invoice auditing with TensorMux/Groq extraction and deterministic integer-cent matching for accurate short-pay decisions.
