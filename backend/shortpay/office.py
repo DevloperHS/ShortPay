@@ -29,16 +29,35 @@ class AuditOffice:
     def in_memory(cls) -> "AuditOffice":
         return cls(store=InMemoryStore())
 
-    def ingest(self, facts: List[Union[InvoiceFact, ContractFact, FacilityFact, DockDwellFact]]):
+    def ingest(
+        self,
+        facts: List[Union[InvoiceFact, ContractFact, FacilityFact, DockDwellFact]],
+        *,
+        source: str = "application",
+    ):
         for fact in facts:
             if isinstance(fact, InvoiceFact):
                 self.store.invoices[fact.invoice_id] = fact
+                record_id = fact.invoice_id
             elif isinstance(fact, ContractFact):
                 self.store.contracts[fact.shipment_id] = fact
+                record_id = fact.shipment_id
             elif isinstance(fact, FacilityFact):
                 self.store.facilities[fact.shipment_id] = fact
+                record_id = fact.shipment_id
             elif isinstance(fact, DockDwellFact):
                 self.store.docks[fact.shipment_id] = fact
+                record_id = fact.shipment_id
+            else:
+                raise TypeError(f"Unsupported fact type: {type(fact).__name__}")
+
+            shipment_id = getattr(fact, "shipment_id")
+            tracer.trace_ingest(
+                trace_id=f"trace-freight-{shipment_id.lower()}",
+                fact_type=type(fact).__name__,
+                record_id=record_id,
+                source=source,
+            )
 
     def match(self, case_key: CaseKey) -> AuditCase:
         invoice = self.store.invoices.get(case_key.invoice_id)
