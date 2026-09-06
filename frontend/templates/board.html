@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Audit board · Shortpay{% endblock %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Weekend freight audit</p>
+      <h1>Review exceptions before money leaves.</h1>
+      <p class="hero-copy">Matched invoices, evidence-backed adjustments, and one clear approval queue.</p>
+    </div>
+    <div class="hero-stat">
+      <span>Open exceptions</span>
+      <strong>{{ grouped.get('Major exceptions', [])|length }}</strong>
+    </div>
+  </section>
+
+  <details class="demo-tools">
+    <summary>Demo controls · Sponsor extraction</summary>
+    <form method="post" action="{{ url_for('dashboard.ingest_invoice') }}">
+      <label for="invoice_text">Invoice text</label>
+      <textarea id="invoice_text" name="invoice_text" rows="5" placeholder="Paste carrier invoice text here…" required></textarea>
+      <div class="form-footer">
+        <small>TensorMux primary · Groq fallback · Maximum 60 requests/provider/minute</small>
+        <button class="button button-secondary" type="submit">Extract and match</button>
+      </div>
+    </form>
+  </details>
+
+  <section class="board" aria-label="Freight audit cases">
+    {% for column in columns %}
+      <div class="board-column">
+        <header class="column-header">
+          <h2>{{ column }}</h2>
+          <span>{{ grouped.get(column, [])|length }}</span>
+        </header>
+
+        <div class="card-stack">
+          {% for case in grouped.get(column, []) %}
+            <a class="case-card disposition-{{ case.disposition|lower }}" href="{{ url_for('dashboard.case_detail', invoice_id=case.invoice_id) }}">
+              <div class="case-topline">
+                <span class="case-carrier">{{ case.carrier_name }}</span>
+                <span class="arrow">→</span>
+              </div>
+              <strong>{{ case.shipment_id }}</strong>
+              <p>{{ case.kanban.subtitle }}</p>
+              <div class="case-money">
+                <span>Billed {{ case.billed_cents|money }}</span>
+                <span class="variance">{{ case.dispute_cents|money }} variance</span>
+              </div>
+            </a>
+          {% else %}
+            <div class="empty-state">No cases</div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  </section>
+{% endblock %}
