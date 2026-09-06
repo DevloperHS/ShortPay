@@ -68,9 +68,11 @@ def test_workflow_groups_match_and_populates_dashboard_fields(monkeypatch):
     assert root.name == "invoice_audit"
     assert root.kind == "WORKFLOW"
     assert root.parent is None
+    assert root.attributes["shortpay.trace_id"] == "trace-freight-shp-88220"
     assert match.name == "match_evidence"
     assert match.kind == "WORKFLOW"
     assert match.parent == "invoice_audit"
+    assert match.attributes["shortpay.trace_id"] == "trace-freight-shp-88220"
     assert '"expected_cents": 92500' in match.attributes["output.value"]
     assert '"dispute_cents": 19500' in match.attributes["output.value"]
     assert sdk.flush_calls == 1

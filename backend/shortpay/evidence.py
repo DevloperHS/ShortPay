@@ -19,6 +19,7 @@ class Mode(str, Enum):
     TL = "TL"
     OCEAN = "OCEAN"
     PARCEL = "PARCEL"
+    OTHER = "OTHER"
 
 
 class InvoiceLine(BaseModel):
