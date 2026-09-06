@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 import main
 from main import app
+from pdf_support import make_text_pdf
 from shortpay.adapters.invoice_extract import ExtractionOutcome
 from shortpay.evidence import ChargeType, InvoiceFact, InvoiceLine
 
@@ -13,7 +14,7 @@ def test_api_auto_ingest_and_cases():
     assert response.status_code == 200
     data = response.json()
     assert len(data) >= 1
-    hero = data[0]
+    hero = next(case for case in data if case["invoice_id"] == "INV-FRT-2026-09")
     assert hero["invoice_id"] == "INV-FRT-2026-09"
     assert hero["shipment_id"] == "SHP-88220"
     assert hero["billed_cents"] == 112000
@@ -123,3 +124,81 @@ def test_sponsor_ingest_route_connects_extraction_to_matcher(monkeypatch):
     assert result["billed_cents"] == 112000
     assert result["expected_cents"] == 92500
     assert result["dispute_cents"] == 19500
+
+
+def _hero_fact() -> InvoiceFact:
+    return InvoiceFact(
+        invoice_id="INV-FRT-2026-09",
+        shipment_id="SHP-88220",
+        carrier_name="FedEx Freight",
+        bill_of_lading="BOL-US-99121",
+        lines=(
+            InvoiceLine(charge_type=ChargeType.BASE_FREIGHT, amount_cents=85000),
+            InvoiceLine(
+                charge_type=ChargeType.DETENTION,
+                amount_cents=17500,
+                billed_minutes=60,
+            ),
+            InvoiceLine(charge_type=ChargeType.LIFTGATE, amount_cents=9500),
+        ),
+    )
+
+
+def test_pdf_ingest_parses_text_then_matches(monkeypatch):
+    captured = {}
+
+    def fake_extract(text):
+        captured["text"] = text
+        return ExtractionOutcome(
+            fact=_hero_fact(),
+            provider="TensorMux",
+            model_name="glm-4-7-flash",
+        )
+
+    monkeypatch.setattr(main, "extract_invoice_with_fallback_details", fake_extract)
+    pdf = make_text_pdf(
+        "FedEx Freight INV-FRT-2026-09 SHP-88220 BOL-US-99121 "
+        "base freight 850.00 detention 175.00 liftgate 95.00"
+    )
+
+    response = client.post(
+        "/api/ingest/invoice-pdf",
+        files={"invoice_pdf": ("hero.pdf", pdf, "application/pdf")},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert "INV-FRT-2026-09" in captured["text"]
+    assert "SHP-88220" in captured["text"]
+    assert result["provider"] == "TensorMux"
+    assert result["billed_cents"] == 112000
+    assert result["expected_cents"] == 92500
+    assert result["dispute_cents"] == 19500
+
+
+def test_pdf_ingest_rejects_non_pdf_filename(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "extract_invoice_with_fallback_details",
+        lambda _: (_ for _ in ()).throw(AssertionError("extractor should not run")),
+    )
+    response = client.post(
+        "/api/ingest/invoice-pdf",
+        files={"invoice_pdf": ("notes.txt", b"not a pdf", "text/plain")},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "PDF only"
+
+
+def test_pdf_ingest_rejects_unreadable_pdf(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "extract_invoice_with_fallback_details",
+        lambda _: (_ for _ in ()).throw(AssertionError("extractor should not run")),
+    )
+    response = client.post(
+        "/api/ingest/invoice-pdf",
+        files={"invoice_pdf": ("hero.pdf", b"not a pdf", "application/pdf")},
+    )
+    assert response.status_code == 400
+    assert "not a PDF" in response.json()["detail"]

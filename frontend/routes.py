@@ -1,9 +1,12 @@
-from flask import Blueprint, current_app, jsonify, render_template, request
+from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
 
 from frontend.services.shortpay_api import ShortpayAPIError
 
 
 dashboard = Blueprint("dashboard", __name__)
+
+
+MAX_PDF_BYTES = 15 * 1024 * 1024
 
 
 def _api():
@@ -19,8 +22,19 @@ def _api_error(exc: ShortpayAPIError, *, not_found: int = 502):
     return jsonify({"detail": str(exc)}), 502
 
 
-@dashboard.get("/")
-@dashboard.get("/cases/<invoice_id>")
+def _wants_json() -> bool:
+    return "application/json" in (request.headers.get("Accept") or "")
+
+
+def _ingest_fail(message: str, status: int):
+    if _wants_json():
+        return jsonify({"error": message, "detail": message}), status
+    flash(message, "error")
+    return redirect(url_for("dashboard.board"))
+
+
+@dashboard.get("/", endpoint="board")
+@dashboard.get("/cases/<invoice_id>", endpoint="case_detail")
 def app(invoice_id: str | None = None):
     return render_template("app.html")
 
@@ -88,6 +102,36 @@ def ingest_invoice():
         return _api_error(exc)
 
     return jsonify(result), 201
+
+
+@dashboard.post("/ingest/pdf")
+@dashboard.post("/api/ui/ingest/pdf")
+def ingest_invoice_pdf():
+    uploaded = request.files.get("invoice_pdf")
+    if uploaded is None or not uploaded.filename:
+        return _ingest_fail("Choose a carrier PDF before extracting.", 400)
+
+    filename = uploaded.filename
+    if not filename.lower().endswith(".pdf"):
+        return _ingest_fail("PDF only.", 400)
+
+    file_bytes = uploaded.read()
+    if not file_bytes:
+        return _ingest_fail("PDF is empty.", 400)
+    if len(file_bytes) > MAX_PDF_BYTES:
+        return _ingest_fail("PDF exceeds 15 MB.", 400)
+
+    try:
+        result = _api().ingest_invoice_pdf(filename, file_bytes, uploaded.mimetype)
+    except ShortpayAPIError as exc:
+        return _ingest_fail(str(exc), 502)
+
+    message = f"{result['invoice_id']} extracted through {result['provider']} and matched."
+    redirect_to = url_for("dashboard.case_detail", invoice_id=result["invoice_id"])
+    if _wants_json():
+        return jsonify({**result, "redirect": redirect_to, "message": message})
+    flash(message, "success")
+    return redirect(redirect_to)
 
 
 @dashboard.get("/healthz")

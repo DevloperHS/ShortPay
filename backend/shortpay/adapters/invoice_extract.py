@@ -5,10 +5,13 @@ import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Callable, Literal
 
 from dotenv import load_dotenv
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 from shortpay.evidence import ChargeType, InvoiceFact, InvoiceLine
 from shortpay.neatlogs import tracer
@@ -36,8 +39,16 @@ class ExtractionError(RuntimeError):
     """Raised when no configured inference provider can extract an invoice."""
 
 
+class PdfParseError(ExtractionError):
+    """Raised when a carrier PDF cannot be read as billed invoice text."""
+
+
 class SponsorRequestLimitError(ExtractionError):
     """Raised before a sponsor request would exceed the rolling rate limit."""
+
+
+MAX_PDF_BYTES = 15 * 1024 * 1024
+MIN_PDF_TEXT_CHARS = 20
 
 
 @dataclass(frozen=True)
@@ -105,6 +116,43 @@ def _request_limit_hook(provider: ProviderName):
         provider_request_limiter.acquire(provider)
 
     return enforce_request_limit
+
+
+def extract_text_from_pdf(pdf_bytes: bytes) -> str:
+    """Pull printable text from a digital carrier PDF. Scans without text fail closed."""
+    if not pdf_bytes:
+        raise PdfParseError("PDF is empty")
+    if len(pdf_bytes) > MAX_PDF_BYTES:
+        raise PdfParseError("PDF exceeds 15 MB")
+    if not pdf_bytes.lstrip().startswith(b"%PDF"):
+        raise PdfParseError("File is not a PDF")
+
+    try:
+        reader = PdfReader(BytesIO(pdf_bytes))
+    except PdfReadError as exc:
+        raise PdfParseError("Could not read this PDF") from exc
+
+    if reader.is_encrypted:
+        try:
+            unlocked = reader.decrypt("")
+        except Exception as exc:
+            raise PdfParseError("This PDF is password-protected") from exc
+        if not unlocked:
+            raise PdfParseError("This PDF is password-protected")
+
+    pages: list[str] = []
+    try:
+        for page in reader.pages:
+            pages.append(page.extract_text() or "")
+    except Exception as exc:
+        raise PdfParseError("Could not read text from this PDF") from exc
+
+    text = "\n".join(part.strip() for part in pages if part and part.strip()).strip()
+    if len(text) < MIN_PDF_TEXT_CHARS:
+        raise PdfParseError(
+            "No readable invoice text in this PDF. Use a text invoice, not a scan."
+        )
+    return text
 
 
 def parse_invoice_json(filepath: str | Path) -> InvoiceFact:

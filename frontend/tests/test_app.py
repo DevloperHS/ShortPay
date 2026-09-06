@@ -1,3 +1,5 @@
+import io
+
 import pytest
 
 from frontend import create_app
@@ -41,6 +43,7 @@ class FakeShortpayAPI:
     def __init__(self):
         self.decisions = []
         self.ingested_text = None
+        self.ingested_pdf = None
 
     def list_cases(self):
         return [CASE]
@@ -71,6 +74,10 @@ class FakeShortpayAPI:
 
     def ingest_invoice(self, invoice_text):
         self.ingested_text = invoice_text
+        return {"invoice_id": CASE["invoice_id"], "provider": "TensorMux"}
+
+    def ingest_invoice_pdf(self, filename, file_bytes, content_type=None):
+        self.ingested_pdf = (filename, file_bytes, content_type)
         return {"invoice_id": CASE["invoice_id"], "provider": "TensorMux"}
 
 
@@ -183,3 +190,40 @@ def test_ingest_rejects_blank_invoice_text(frontend_client):
     assert response.status_code == 400
     assert response.json["detail"] == "Paste invoice text before running extraction."
     assert api.ingested_text is None
+
+
+def test_pdf_ingest_calls_sponsor_api(frontend_client):
+    client, api = frontend_client
+    response = client.post(
+        "/ingest/pdf",
+        data={"invoice_pdf": (io.BytesIO(b"%PDF-1.4 hero"), "hero.pdf")},
+    )
+
+    assert response.status_code == 302
+    assert api.ingested_pdf[0] == "hero.pdf"
+    assert api.ingested_pdf[1] == b"%PDF-1.4 hero"
+    assert response.headers["Location"].endswith("/cases/INV-FRT-2026-09")
+
+
+def test_pdf_ingest_json_returns_redirect(frontend_client):
+    client, api = frontend_client
+    response = client.post(
+        "/ingest/pdf",
+        data={"invoice_pdf": (io.BytesIO(b"%PDF-1.4 hero"), "hero.pdf")},
+        headers={"Accept": "application/json"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert api.ingested_pdf[0] == "hero.pdf"
+    assert payload["invoice_id"] == CASE["invoice_id"]
+    assert payload["redirect"].endswith("/cases/INV-FRT-2026-09")
+
+
+def test_pdf_ingest_rejects_missing_file(frontend_client):
+    client, api = frontend_client
+    response = client.post("/ingest/pdf", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert b"Choose a carrier PDF" in response.data
+    assert api.ingested_pdf is None

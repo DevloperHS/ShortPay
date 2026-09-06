@@ -16,6 +16,15 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='react/assets/index.css') }}">
   </head>
   <body>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div id="flash-messages" style="display:none">
+          {% for category, message in messages %}
+            <div class="alert alert-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
     <div id="root"></div>
     <script type="module" src="{{ url_for('static', filename='react/assets/main.js') }}"></script>
   </body>
