@@ -10,14 +10,14 @@ From the repository root, start FastAPI:
 
 ```powershell
 $env:PYTHONPATH="backend"
-.\.venv\Scripts\python.exe -m uvicorn main:app --app-dir backend --port 8000
+uv run uvicorn main:app --app-dir backend --port 8000
 ```
 
 In a second terminal, start Flask:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r frontend/requirements.txt
-.\.venv\Scripts\python.exe -m frontend
+uv sync
+uv run python -m frontend
 ```
 
 Open `http://127.0.0.1:5000`. Set `SHORTPAY_API_URL` to use a FastAPI service
