@@ -227,3 +227,42 @@ def test_pdf_ingest_rejects_missing_file(frontend_client):
     assert response.status_code == 200
     assert b"Choose a carrier PDF" in response.data
     assert api.ingested_pdf is None
+
+
+def test_api_ui_pdf_ingest_success(frontend_client):
+    client, api = frontend_client
+    response = client.post(
+        "/api/ui/ingest/pdf",
+        data={"invoice_pdf": (io.BytesIO(b"%PDF-1.4 sample"), "invoice.pdf")},
+    )
+
+    assert response.status_code == 200
+    assert response.is_json
+    payload = response.get_json()
+    assert api.ingested_pdf[0] == "invoice.pdf"
+    assert payload["invoice_id"] == CASE["invoice_id"]
+    assert payload["redirect"].endswith("/cases/INV-FRT-2026-09")
+
+
+def test_api_ui_pdf_ingest_rejects_missing_file(frontend_client):
+    client, api = frontend_client
+    response = client.post("/api/ui/ingest/pdf")
+
+    assert response.status_code == 400
+    assert response.is_json
+    assert "Choose a carrier PDF" in response.get_json()["detail"]
+    assert api.ingested_pdf is None
+
+
+def test_api_ui_pdf_ingest_rejects_non_pdf(frontend_client):
+    client, api = frontend_client
+    response = client.post(
+        "/api/ui/ingest/pdf",
+        data={"invoice_pdf": (io.BytesIO(b"not a pdf"), "invoice.txt")},
+    )
+
+    assert response.status_code == 400
+    assert response.is_json
+    assert response.get_json()["detail"] == "PDF only."
+    assert api.ingested_pdf is None
+

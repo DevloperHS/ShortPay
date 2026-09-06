@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Truck, Sun, Moon, RefreshCw, ArrowLeft, ArrowUpRight, Check } from 'lucide-react'
+import { Truck, Sun, Moon, RefreshCw, ArrowLeft, ArrowUpRight, Check, FileText, FileUp, X } from 'lucide-react'
 
 const columns = ['Out of scope', 'Auto-closed', 'Major exceptions', 'Short-paid', 'Paid as billed']
 const money = cents => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format((cents || 0) / 100)
@@ -15,22 +15,144 @@ async function api(path, body) {
 }
 
 function ImportInvoice({ navigate }) {
+  const [tab, setTab] = useState('text')
   const [text, setText] = useState('')
+  const [file, setFile] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  async function submit(event) {
-    event.preventDefault(); setBusy(true); setError('')
+
+  async function submitText(event) {
+    event.preventDefault()
+    if (!text.trim()) return
+    setBusy(true); setError('')
     try {
       const result = await api('/ingest', { invoice_text: text.trim() })
       navigate(`/cases/${encodeURIComponent(result.invoice_id)}`)
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
+
+  async function submitPdf(event) {
+    event.preventDefault()
+    if (!file) {
+      setError('Choose a carrier PDF before extracting.')
+      return
+    }
+    if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+      setError('PDF only.')
+      return
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setError('PDF exceeds 15 MB.')
+      return
+    }
+    setBusy(true); setError('')
+    try {
+      const form = new FormData()
+      form.append('invoice_pdf', file, file.name)
+      const res = await fetch('/api/ui/ingest/pdf', {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+        body: form,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.detail || data.error || 'PDF extraction failed.')
+      }
+      navigate(`/cases/${encodeURIComponent(data.invoice_id)}`)
+    } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
+
+  function onFileChange(e) {
+    setError('')
+    const chosen = e.target.files && e.target.files[0]
+    if (!chosen) return
+    if (!chosen.name.toLowerCase().endsWith('.pdf') && chosen.type !== 'application/pdf') {
+      setError('PDF only.')
+      return
+    }
+    if (chosen.size > 15 * 1024 * 1024) {
+      setError('PDF exceeds 15 MB.')
+      return
+    }
+    setFile(chosen)
+  }
+
   return <details className="import"><summary>Import carrier invoice</summary>
-    <form onSubmit={submit}>
-      <label htmlFor="invoice">Invoice text</label>
-      <textarea id="invoice" required value={text} onChange={e => setText(e.target.value)} rows={5} disabled={busy} />
-      <button className="primary" disabled={busy || !text.trim()}>{busy ? 'Extracting and matching...' : 'Extract and match'}</button>
-    </form>
+    <div className="import-nav" role="tablist">
+      <button
+        type="button"
+        className={`tab-btn${tab === 'text' ? ' active' : ''}`}
+        onClick={() => { setTab('text'); setError('') }}
+      >
+        <FileText size={15} /> Paste invoice text
+      </button>
+      <button
+        type="button"
+        className={`tab-btn${tab === 'pdf' ? ' active' : ''}`}
+        onClick={() => { setTab('pdf'); setError('') }}
+      >
+        <FileUp size={15} /> Upload PDF
+      </button>
+    </div>
+
+    {tab === 'text' ? (
+      <form onSubmit={submitText}>
+        <label htmlFor="invoice">Invoice text</label>
+        <textarea
+          id="invoice"
+          required
+          placeholder="Paste carrier invoice text (UPS, FedEx, DHL, or generic EDI format)..."
+          value={text}
+          onChange={e => setText(e.target.value)}
+          rows={5}
+          disabled={busy}
+        />
+        <button className="primary" disabled={busy || !text.trim()}>
+          {busy ? 'Extracting and matching...' : 'Extract and match'}
+        </button>
+      </form>
+    ) : (
+      <form onSubmit={submitPdf}>
+        <label htmlFor="invoice-pdf">Carrier invoice PDF</label>
+        {!file ? (
+          <label className="drop-zone" htmlFor="invoice-pdf">
+            <FileUp size={28} />
+            <span>Choose a carrier PDF or drag & drop</span>
+            <small>PDF format · Up to 15 MB</small>
+            <input
+              id="invoice-pdf"
+              type="file"
+              accept=".pdf,application/pdf"
+              disabled={busy}
+              onChange={onFileChange}
+              style={{ display: 'none' }}
+            />
+          </label>
+        ) : (
+          <div className="file-card">
+            <div className="file-meta">
+              <FileText size={20} />
+              <div>
+                <strong>{file.name}</strong>
+                <small>{Math.max(1, Math.round(file.size / 1024))} KB · PDF document</small>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="icon-btn"
+              title="Remove file"
+              onClick={() => setFile(null)}
+              disabled={busy}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+        <button className="primary" disabled={busy || !file}>
+          {busy ? 'Extracting invoice facts from PDF...' : 'Upload and match PDF'}
+        </button>
+      </form>
+    )}
     {error && <p role="alert">{error}</p>}
   </details>
 }

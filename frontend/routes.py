@@ -23,7 +23,7 @@ def _api_error(exc: ShortpayAPIError, *, not_found: int = 502):
 
 
 def _wants_json() -> bool:
-    return "application/json" in (request.headers.get("Accept") or "")
+    return "application/json" in (request.headers.get("Accept") or "") or request.path.startswith("/api/")
 
 
 def _ingest_fail(message: str, status: int):
