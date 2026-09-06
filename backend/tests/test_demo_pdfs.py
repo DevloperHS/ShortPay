@@ -2,7 +2,9 @@ from pathlib import Path
 
 from shortpay.adapters.invoice_extract import extract_text_from_pdf
 
-PDF_DIR = Path(__file__).resolve().parents[2] / "pdf"
+ROOT = Path(__file__).resolve().parents[2]
+PDF_DIR = ROOT / "pdf"
+FIXTURES = ROOT / "fixtures"
 
 EXPECTED = {
     "INV-FRT-2026-09": ("SHP-88220", "BOL-US-99121", "BASE_FREIGHT", "DETENTION", "LIFTGATE"),
@@ -21,6 +23,15 @@ EXPECTED = {
 def test_demo_pdf_folder_has_ten_invoices():
     files = sorted(path.name for path in PDF_DIR.glob("*.pdf"))
     assert files == sorted(f"{invoice_id}.pdf" for invoice_id in EXPECTED)
+
+
+def test_demo_pdf_shipments_have_matching_evidence():
+    baseline = (FIXTURES / "freight_audit_baseline.csv").read_text(encoding="utf-8")
+    for needles in EXPECTED.values():
+        shipment_id = needles[0]
+        assert shipment_id in baseline
+        assert (FIXTURES / f"dock_{shipment_id}.json").exists() or shipment_id == "SHP-88219"
+        assert (FIXTURES / f"facility_{shipment_id}.json").exists() or shipment_id == "SHP-88219"
 
 
 def test_demo_pdfs_expose_extractable_invoice_facts():

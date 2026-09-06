@@ -14,7 +14,7 @@ def test_api_auto_ingest_and_cases():
     assert response.status_code == 200
     data = response.json()
     assert len(data) >= 1
-    hero = data[0]
+    hero = next(case for case in data if case["invoice_id"] == "INV-FRT-2026-09")
     assert hero["invoice_id"] == "INV-FRT-2026-09"
     assert hero["shipment_id"] == "SHP-88220"
     assert hero["billed_cents"] == 112000

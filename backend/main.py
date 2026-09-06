@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 from typing import List, Dict, Any
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -26,26 +26,24 @@ office = AuditOffice.in_memory()
 
 def auto_ingest_fixtures():
     """Auto-ingest project fixtures on startup."""
-    fixtures_dir = os.path.join(os.path.dirname(__file__), "..", "fixtures")
-    csv_path = os.path.join(fixtures_dir, "freight_audit_baseline.csv")
-    dock_path = os.path.join(fixtures_dir, "dock_SHP-88220.json")
-    facility_path = os.path.join(fixtures_dir, "facility_SHP-88220.json")
+    fixtures_dir = Path(__file__).resolve().parent.parent / "fixtures"
+    csv_path = fixtures_dir / "freight_audit_baseline.csv"
 
-    if os.path.exists(csv_path):
-        contracts = parse_baseline_csv(csv_path)
+    if csv_path.exists():
+        contracts = parse_baseline_csv(str(csv_path))
         office.ingest(
             contracts,
             source="fixture:freight_audit_baseline.csv",
             emit_trace=False,
         )
 
-    if os.path.exists(dock_path):
-        dock = parse_dock_log_json(dock_path)
-        office.ingest([dock], source="fixture:dock_log", emit_trace=False)
+    for dock_path in sorted(fixtures_dir.glob("dock_*.json")):
+        dock = parse_dock_log_json(str(dock_path))
+        office.ingest([dock], source=f"fixture:{dock_path.name}", emit_trace=False)
 
-    if os.path.exists(facility_path):
-        facility = parse_facility_json(facility_path)
-        office.ingest([facility], source="fixture:facility_master", emit_trace=False)
+    for facility_path in sorted(fixtures_dir.glob("facility_*.json")):
+        facility = parse_facility_json(str(facility_path))
+        office.ingest([facility], source=f"fixture:{facility_path.name}", emit_trace=False)
 
     for discovered in discover_invoice_files(fixtures_dir):
         invoice = parse_invoice_json(discovered.path)
