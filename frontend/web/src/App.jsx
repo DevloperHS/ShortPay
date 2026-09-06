@@ -14,6 +14,14 @@ async function api(path, body) {
   return data
 }
 
+function isBoard(data) {
+  return Array.isArray(data)
+}
+
+function isCase(data) {
+  return Boolean(data && typeof data === 'object' && !Array.isArray(data) && data.invoice_id)
+}
+
 function ImportInvoice({ navigate }) {
   const [tab, setTab] = useState('text')
   const [text, setText] = useState('')
@@ -222,8 +230,23 @@ export default function App() {
   const [error, setError] = useState('')
   const [revision, setRevision] = useState(0)
   const detail = path.startsWith('/cases/')
-  const navigate = next => { history.pushState(null, '', next); setPath(next); window.scrollTo(0, 0) }
-  useEffect(() => { const pop = () => setPath(location.pathname); addEventListener('popstate', pop); return () => removeEventListener('popstate', pop) }, [])
+  const ready = detail ? isCase(data) : isBoard(data)
+  const navigate = next => {
+    history.pushState(null, '', next)
+    setData(null)
+    setError('')
+    setPath(next)
+    window.scrollTo(0, 0)
+  }
+  useEffect(() => {
+    const pop = () => {
+      setData(null)
+      setError('')
+      setPath(location.pathname)
+    }
+    addEventListener('popstate', pop)
+    return () => removeEventListener('popstate', pop)
+  }, [])
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     try { localStorage.setItem('shortpay-theme', theme) } catch { /* Storage may be disabled. */ }
@@ -238,7 +261,7 @@ export default function App() {
   return <><header className="site-header"><a className="brand" href="/" onClick={e => link(e, '/')}><Truck /><strong>Shortpay</strong><span>Freight audit desk</span></a>
     <button title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`} aria-label="Toggle color theme" aria-pressed={theme === 'dark'} onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>{theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}</button></header>
     <main><div className="toolbar">{detail ? <a href="/" onClick={e => link(e, '/')}><ArrowLeft size={16} />Audit board</a> : <span>Pre-pay control room</span>}<button title="Refresh cases" aria-label="Refresh cases" onClick={() => setRevision(v => v + 1)}><RefreshCw size={16} /></button></div>
-      {error ? <section role="alert"><h2>Unable to load cases</h2><p>{error}</p><button onClick={() => setRevision(v => v + 1)}>Try again</button></section> : !data ? <p role="status">Loading audit data...</p> : detail ? <CaseDetail key={path} item={data} reload={() => setRevision(v => v + 1)} /> : <>
+      {error ? <section role="alert"><h2>Unable to load cases</h2><p>{error}</p><button onClick={() => setRevision(v => v + 1)}>Try again</button></section> : !ready ? <p role="status">Loading audit data...</p> : detail ? <CaseDetail key={path} item={data} reload={() => setRevision(v => v + 1)} /> : <>
         <div className="heading"><div><h1>Audit board</h1><p>Weekend freight audit</p></div><div><span>Open exceptions</span><strong>{data.filter(c => c.kanban.column === 'Major exceptions').length}</strong></div></div>
         <ImportInvoice navigate={navigate} />
         <section className="board" aria-label="Freight audit cases">{columns.map(column => {
