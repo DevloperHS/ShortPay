@@ -1,3 +1,6 @@
 shipment_id,carrier,bill_of_lading,mode,agreed_base_rate,allowed_dwell_minutes,detention_rate_per_hour
 SHP-88219,Maersk,BOL-US-99120,OCEAN,4200.00,120,75.00
 SHP-88220,FedEx Freight,BOL-US-99121,LTL,850.00,30,75.00
+SHP-88221,FedEx Freight,BOL-US-99122,LTL,850.00,30,75.00
+SHP-88222,XPO Logistics,BOL-US-99123,LTL,640.00,30,75.00
+SHP-88223,Old Dominion,BOL-US-99124,TL,2100.00,30,75.00

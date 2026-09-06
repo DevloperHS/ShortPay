@@ -1,3 +1,5 @@
+import io
+
 import pytest
 
 from frontend import create_app
@@ -40,6 +42,7 @@ class FakeShortpayAPI:
     def __init__(self):
         self.decisions = []
         self.ingested_text = None
+        self.ingested_pdf = None
 
     def list_cases(self):
         return [CASE]
@@ -54,6 +57,10 @@ class FakeShortpayAPI:
 
     def ingest_invoice(self, invoice_text):
         self.ingested_text = invoice_text
+        return {"invoice_id": CASE["invoice_id"], "provider": "TensorMux"}
+
+    def ingest_invoice_pdf(self, filename, file_bytes, content_type=None):
+        self.ingested_pdf = (filename, file_bytes, content_type)
         return {"invoice_id": CASE["invoice_id"], "provider": "TensorMux"}
 
 
@@ -75,7 +82,8 @@ def test_board_renders_prd_columns_and_case(frontend_client):
     assert b"Protect every payable" in response.data
     assert b"At-risk spend" in response.data
     assert b"Upload PDF" in response.data
-    assert b"PDF extraction is UI-only for now" in response.data
+    assert b"PDF text is parsed" in response.data
+    assert b"data-upload-url" in response.data
     assert b'data-theme="light"' in response.data
     assert b"Light desk" in response.data
     assert b"data-theme-toggle" in response.data
@@ -138,3 +146,40 @@ def test_demo_ingest_calls_sponsor_api(frontend_client):
     assert response.status_code == 302
     assert api.ingested_text == "carrier invoice"
     assert response.headers["Location"].endswith("/cases/INV-FRT-2026-09")
+
+
+def test_pdf_ingest_calls_sponsor_api(frontend_client):
+    client, api = frontend_client
+    response = client.post(
+        "/ingest/pdf",
+        data={"invoice_pdf": (io.BytesIO(b"%PDF-1.4 hero"), "hero.pdf")},
+    )
+
+    assert response.status_code == 302
+    assert api.ingested_pdf[0] == "hero.pdf"
+    assert api.ingested_pdf[1] == b"%PDF-1.4 hero"
+    assert response.headers["Location"].endswith("/cases/INV-FRT-2026-09")
+
+
+def test_pdf_ingest_json_returns_redirect(frontend_client):
+    client, api = frontend_client
+    response = client.post(
+        "/ingest/pdf",
+        data={"invoice_pdf": (io.BytesIO(b"%PDF-1.4 hero"), "hero.pdf")},
+        headers={"Accept": "application/json"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert api.ingested_pdf[0] == "hero.pdf"
+    assert payload["invoice_id"] == CASE["invoice_id"]
+    assert payload["redirect"].endswith("/cases/INV-FRT-2026-09")
+
+
+def test_pdf_ingest_rejects_missing_file(frontend_client):
+    client, api = frontend_client
+    response = client.post("/ingest/pdf", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert b"Choose a carrier PDF" in response.data
+    assert api.ingested_pdf is None

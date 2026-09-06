@@ -29,7 +29,7 @@
     <div class="import-panel">
       <div class="import-tabs" role="tablist" aria-label="Invoice import method">
         <button class="import-tab is-active" id="paste-tab" type="button" role="tab" aria-selected="true" aria-controls="paste-panel" data-import-tab="paste-panel">Paste invoice text</button>
-        <button class="import-tab" id="upload-tab" type="button" role="tab" aria-selected="false" aria-controls="upload-panel" data-import-tab="upload-panel">Upload PDF <span>Preview</span></button>
+        <button class="import-tab" id="upload-tab" type="button" role="tab" aria-selected="false" aria-controls="upload-panel" data-import-tab="upload-panel">Upload PDF</button>
       </div>
 
       <div class="import-panels-wrapper">
@@ -47,7 +47,7 @@
         </section>
 
         <section class="import-tab-panel" id="upload-panel" role="tabpanel" aria-labelledby="upload-tab" hidden>
-          <div class="pdf-upload-flow" data-upload-flow>
+          <div class="pdf-upload-flow" data-upload-flow data-upload-url="{{ url_for('dashboard.ingest_invoice_pdf') }}">
             <div class="pdf-upload-body">
               <div class="drop-zone" data-drop-zone>
                 <input class="file-input" id="invoice_pdf" type="file" accept="application/pdf,.pdf" data-pdf-input>
@@ -66,20 +66,22 @@
               </div>
 
               <div class="upload-progress" data-upload-progress hidden aria-live="polite">
-                <div class="progress-header"><span data-progress-label>Uploading securely</span><strong data-progress-value>0%</strong></div>
+                <div class="progress-header"><span data-progress-label>Uploading invoice</span><strong data-progress-value>0%</strong></div>
                 <div class="progress-track"><span data-progress-bar></span></div>
               </div>
 
+              <p class="upload-error" data-upload-error hidden></p>
+
               <ol class="processing-steps" data-processing-steps aria-live="polite">
                 <li data-step="upload"><span>1</span><div><strong>Upload invoice</strong><small>Choose a carrier PDF</small></div><i></i></li>
-                <li data-step="processing"><span>2</span><div><strong>Extract invoice data</strong><small>Awaiting secure upload</small></div><i></i></li>
-                <li data-step="complete"><span>3</span><div><strong>Ready for matching</strong><small>Review will begin when extraction is connected</small></div><i></i></li>
+                <li data-step="processing"><span>2</span><div><strong>Extract billed facts</strong><small>TensorMux primary · Groq fallback</small></div><i></i></li>
+                <li data-step="complete"><span>3</span><div><strong>Match the case</strong><small>Dock, contract, and facility facts</small></div><i></i></li>
               </ol>
             </div>
 
             <div class="pdf-flow-footer">
-              <small><span class="preview-pill">Preview flow</span> PDF extraction is UI-only for now. No document is sent or stored.</small>
-              <button class="button button-primary" type="button" data-start-upload disabled>Upload and prepare <span>→</span></button>
+              <small>PDF text is parsed, then mapped onto InvoiceFact. Same match path as paste.</small>
+              <button class="button button-primary" type="button" data-start-upload disabled>Upload and extract <span>→</span></button>
             </div>
           </div>
         </section>
@@ -147,14 +149,6 @@
         });
 
         if (currentPanel && targetPanel) {
-          await animate(
-            currentPanel,
-            reducedMotion
-              ? [{ opacity: 1 }, { opacity: 0 }]
-              : [{ opacity: 1, transform: 'translateY(0) scale(1)' }, { opacity: 0, transform: 'translateY(-4px) scale(0.995)' }],
-            reducedMotion ? 100 : 140
-          );
-
           currentPanel.hidden = true;
           currentPanel.classList.remove('is-active');
           currentPanel.style.opacity = '';
@@ -196,17 +190,48 @@
       const progressLabel = flow.querySelector('[data-progress-label]');
       const progressValue = flow.querySelector('[data-progress-value]');
       const progressBar = flow.querySelector('[data-progress-bar]');
+      const uploadError = flow.querySelector('[data-upload-error]');
+      const startLabel = start.innerHTML;
+      const maxPdfBytes = 15 * 1024 * 1024;
       let selectedFile;
+      let activeUpload;
 
       const setStep = (name, status) => flow.querySelector(`[data-step="${name}"]`).dataset.status = status;
+      const setProgress = (value, label) => {
+        progress.hidden = false;
+        progressValue.textContent = `${value}%`;
+        progressBar.style.width = `${value}%`;
+        if (label) progressLabel.textContent = label;
+      };
+      const hideError = () => {
+        uploadError.hidden = true;
+        uploadError.textContent = '';
+      };
+      const showError = (message) => {
+        uploadError.hidden = false;
+        uploadError.textContent = message;
+        setStep('processing', 'error');
+        start.disabled = false;
+        start.innerHTML = startLabel;
+      };
+      const isPdf = (file) => file && (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'));
       const selectFile = (file) => {
-        if (!file || (file.type && file.type !== 'application/pdf') && !file.name.toLowerCase().endsWith('.pdf')) return;
+        hideError();
+        if (!isPdf(file)) {
+          showError('PDF only.');
+          return;
+        }
+        if (file.size > maxPdfBytes) {
+          showError('PDF exceeds 15 MB.');
+          return;
+        }
         selectedFile = file;
         fileName.textContent = file.name;
         fileSize.textContent = `${Math.max(1, Math.round(file.size / 1024))} KB · PDF document`;
         selected.hidden = false;
         dropZone.hidden = true;
         start.disabled = false;
+        start.innerHTML = startLabel;
         setStep('upload', 'complete');
         setStep('processing', 'pending');
         setStep('complete', 'pending');
@@ -221,12 +246,18 @@
       ['dragleave', 'drop'].forEach((event) => dropZone.addEventListener(event, (e) => { e.preventDefault(); dropZone.classList.remove('is-dragging'); }));
       dropZone.addEventListener('drop', (event) => selectFile(event.dataTransfer.files[0]));
       remove.addEventListener('click', () => {
+        if (activeUpload) {
+          activeUpload.abort();
+          activeUpload = undefined;
+        }
         selectedFile = undefined;
         input.value = '';
         selected.hidden = true;
         dropZone.hidden = false;
         start.disabled = true;
+        start.innerHTML = startLabel;
         progress.hidden = true;
+        hideError();
         ['upload', 'processing', 'complete'].forEach((step) => setStep(step, ''));
         animate(
           dropZone,
@@ -235,23 +266,46 @@
         );
       });
       start.addEventListener('click', () => {
-        if (!selectedFile) return;
+        if (!selectedFile || !flow.dataset.uploadUrl) return;
+        hideError();
         start.disabled = true;
-        progress.hidden = false;
         setStep('processing', 'active');
-        let value = 0;
-        const timer = window.setInterval(() => {
-          value = Math.min(value + 10, 100);
-          progressValue.textContent = `${value}%`;
-          progressBar.style.width = `${value}%`;
-          if (value === 100) {
-            window.clearInterval(timer);
-            progressLabel.textContent = 'PDF prepared locally';
+        setStep('complete', 'pending');
+        setProgress(0, 'Uploading invoice');
+
+        const body = new FormData();
+        body.append('invoice_pdf', selectedFile, selectedFile.name);
+        const xhr = new XMLHttpRequest();
+        activeUpload = xhr;
+        xhr.open('POST', flow.dataset.uploadUrl);
+        xhr.setRequestHeader('Accept', 'application/json');
+        xhr.upload.addEventListener('progress', (event) => {
+          if (!event.lengthComputable) return;
+          const value = Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100)));
+          setProgress(value, 'Uploading invoice');
+        });
+        xhr.addEventListener('load', () => {
+          activeUpload = undefined;
+          let payload = {};
+          try { payload = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
+          if (xhr.status >= 200 && xhr.status < 300 && payload.redirect) {
+            setProgress(100, 'Matched');
             setStep('processing', 'complete');
             setStep('complete', 'complete');
-            start.textContent = 'PDF ready for extraction';
+            window.location.href = payload.redirect;
+            return;
           }
-        }, 85);
+          showError(payload.error || payload.detail || 'Invoice extraction failed.');
+        });
+        xhr.addEventListener('error', () => {
+          activeUpload = undefined;
+          showError('Could not reach Shortpay. Start the backend and try again.');
+        });
+        xhr.addEventListener('abort', () => {
+          activeUpload = undefined;
+        });
+        xhr.upload.addEventListener('load', () => setProgress(100, 'Extracting billed lines'));
+        xhr.send(body);
       });
     })();
   </script>

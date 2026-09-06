@@ -15,6 +15,8 @@ dependencies = [
   "requests>=2.31.0,<3.0.0",
   "neatlogs>=1.4.21",
   "flask>=3.0.0,<4.0.0",
+  "pypdf>=6.17.0",
+  "python-multipart>=0.0.32",
 ]
 
 [dependency-groups]

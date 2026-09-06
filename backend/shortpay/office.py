@@ -93,28 +93,47 @@ class AuditOffice:
             raise KeyError(f"Invoice {case_key.invoice_id} not found in store")
 
         contract = self.store.contracts.get(case_key.shipment_id)
-        facility = self.store.facilities.get(case_key.shipment_id)
-        dock = self.store.docks.get(case_key.shipment_id)
+        if not contract:
+            raise KeyError(f"Incomplete facts for shipment {case_key.shipment_id}: missing contract")
 
-        if not (contract and facility and dock):
-            raise KeyError(f"Incomplete facts for shipment {case_key.shipment_id}")
-
-        match_res = match_evidence(invoice, contract, facility, dock)
-
-        if match_res.is_out_of_scope:
-            disposition = SkippedOutOfScope(skip_reason=match_res.skip_reason or "Out of scope")
+        if contract.mode not in (Mode.LTL, Mode.TL):
+            match_res = MatchResult(
+                is_out_of_scope=True,
+                skip_reason=f"Mode {contract.mode.value} is out of v1 scope",
+                billed_total_cents=invoice.total_billed_cents,
+            )
+            disposition = SkippedOutOfScope(skip_reason=match_res.skip_reason)
+            policy = None
         else:
-            policy = self.store.get_policy_for(contract, facility)
+            facility = self.store.facilities.get(case_key.shipment_id)
+            dock = self.store.docks.get(case_key.shipment_id)
+            missing = [
+                name
+                for name, fact in (("facility", facility), ("dock", dock))
+                if not fact
+            ]
+            if missing:
+                raise KeyError(
+                    f"Incomplete facts for shipment {case_key.shipment_id}: "
+                    f"missing {', '.join(missing)}"
+                )
 
-            # Check if auto-close applies
-            if policy.permits_auto_close(
-                dispute_cents=match_res.dispute_total_cents,
-                fired_rule_ids=match_res.fired_rule_ids,
-                has_unexplained_lines=match_res.has_unexplained_lines,
-            ):
-                disposition = AutoClosed()
+            match_res = match_evidence(invoice, contract, facility, dock)
+            if match_res.is_out_of_scope:
+                disposition = SkippedOutOfScope(
+                    skip_reason=match_res.skip_reason or "Out of scope"
+                )
+                policy = None
             else:
-                disposition = NeedsReview()
+                policy = self.store.get_policy_for(contract, facility)
+                if policy.permits_auto_close(
+                    dispute_cents=match_res.dispute_total_cents,
+                    fired_rule_ids=match_res.fired_rule_ids,
+                    has_unexplained_lines=match_res.has_unexplained_lines,
+                ):
+                    disposition = AutoClosed()
+                else:
+                    disposition = NeedsReview()
 
         case = AuditCase(
             case_key=case_key,
@@ -122,7 +141,7 @@ class AuditOffice:
             bill_of_lading=contract.bill_of_lading,
             match_result=match_res,
             disposition=disposition,
-            policy_id=policy.policy_id if not match_res.is_out_of_scope else None,
+            policy_id=None if policy is None else policy.policy_id,
         )
         self.store.save_case(case)
 

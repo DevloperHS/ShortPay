@@ -114,6 +114,10 @@ h2 { margin-bottom: 4px; font-size: 18px; letter-spacing: -.02em; }
 .processing-steps li[data-status="complete"] > span { border-color: color-mix(in srgb, var(--green) 48%, transparent); color: var(--green); }
 .processing-steps li[data-status="complete"] strong { color: var(--ink); }
 .processing-steps li[data-status="complete"] i { background: var(--green); box-shadow: 0 0 7px color-mix(in srgb, var(--green) 55%, transparent); }
+.processing-steps li[data-status="error"] { border-color: color-mix(in srgb, var(--red) 55%, transparent); background: color-mix(in srgb, var(--red) 8%, transparent); }
+.processing-steps li[data-status="error"] i { background: var(--red); box-shadow: 0 0 7px color-mix(in srgb, var(--red) 55%, transparent); }
+.upload-error { margin: 10px 0 0; color: var(--red); font-size: 11px; line-height: 1.4; }
+.upload-error[hidden] { display: none !important; }
 .pdf-flow-footer { display: flex; justify-content: space-between; align-items: center; gap: 18px; min-height: 48px; padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--line); }
 .pdf-flow-footer small { max-width: 580px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .pdf-flow-footer .button:disabled { color: var(--disabled-ink); background: linear-gradient(180deg, color-mix(in srgb, var(--shell-bottom) 70%, var(--well)), var(--well)); box-shadow: 0 1px .5px var(--highlight) inset; cursor: not-allowed; }
