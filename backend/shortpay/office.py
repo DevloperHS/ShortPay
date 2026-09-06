@@ -13,7 +13,6 @@ from shortpay.case import (
 )
 from shortpay.matching import match_evidence, MatchResult
 from shortpay.store import InMemoryStore
-from shortpay.policy import LaneKey
 from shortpay.neatlogs import tracer, compute_evidence_hash
 
 
@@ -106,7 +105,6 @@ class AuditOffice:
         else:
             policy = self.store.get_policy_for(contract, facility)
 
-            # Check if auto-close applies
             if policy.permits_auto_close(
                 dispute_cents=match_res.dispute_total_cents,
                 fired_rule_ids=match_res.fired_rule_ids,
@@ -126,7 +124,6 @@ class AuditOffice:
         )
         self.store.save_case(case)
 
-        # Emit Neatlogs trace span for match_evidence
         ev_hash = compute_evidence_hash({
             "invoice_id": case_key.invoice_id,
             "shipment_id": case_key.shipment_id,
@@ -177,7 +174,6 @@ class AuditOffice:
                     f"Stale payable: requested {action.expected_payable_cents}, expected {case.match_result.expected_total_cents}"
                 )
 
-            # Learn lane rules for future auto-close
             contract = self.store.contracts.get(case_key.shipment_id)
             facility = self.store.facilities.get(case_key.shipment_id)
             if contract and facility:
@@ -204,7 +200,6 @@ class AuditOffice:
         )
         self.store.save_case(updated_case)
 
-        # Emit Neatlogs trace span for human decision
         trace_id = f"trace-freight-{case_key.shipment_id.lower()}"
         tracer.trace_decide(
             trace_id=trace_id,

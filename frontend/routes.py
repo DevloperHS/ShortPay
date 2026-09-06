@@ -1,96 +1,93 @@
-from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, jsonify, render_template, request
 
 from frontend.services.shortpay_api import ShortpayAPIError
 
 
 dashboard = Blueprint("dashboard", __name__)
 
-COLUMNS = (
-    "Out of scope",
-    "Auto-closed",
-    "Major exceptions",
-    "Short-paid",
-    "Paid as billed",
-)
-
 
 def _api():
     return current_app.extensions["shortpay_api"]
 
 
+def _api_error(exc: ShortpayAPIError, *, not_found: int = 502):
+    status = exc.status_code
+    if status == 404:
+        return jsonify({"detail": str(exc)}), not_found
+    if status in {400, 422, 502}:
+        return jsonify({"detail": str(exc)}), status
+    return jsonify({"detail": str(exc)}), 502
+
+
 @dashboard.get("/")
-def board():
-    grouped = {column: [] for column in COLUMNS}
-    try:
-        cases = _api().list_cases()
-        for case in cases:
-            column = case.get("kanban", {}).get("column", "Out of scope")
-            grouped.setdefault(column, []).append(case)
-    except ShortpayAPIError as exc:
-        flash(str(exc), "error")
-
-    return render_template("board.html", columns=COLUMNS, grouped=grouped)
-
-
 @dashboard.get("/cases/<invoice_id>")
-def case_detail(invoice_id: str):
+def app(invoice_id: str | None = None):
+    return render_template("app.html")
+
+
+@dashboard.get("/api/ui/cases")
+def list_cases():
     try:
-        case = _api().get_case(invoice_id)
+        return jsonify(_api().list_cases())
     except ShortpayAPIError as exc:
-        flash(str(exc), "error")
-        return redirect(url_for("dashboard.board"))
-    return render_template("case_detail.html", case=case)
+        return _api_error(exc)
 
 
-@dashboard.post("/cases/<invoice_id>/decide")
+@dashboard.get("/api/ui/cases/<invoice_id>")
+def get_case(invoice_id: str):
+    try:
+        return jsonify(_api().get_case(invoice_id))
+    except ShortpayAPIError as exc:
+        return _api_error(exc, not_found=404)
+
+
+@dashboard.post("/api/ui/cases/<invoice_id>/decide")
 def decide(invoice_id: str):
-    action = request.form.get("action_type", "")
-    shipment_id = request.form.get("shipment_id", "")
-    override_reason = request.form.get("override_reason", "").strip()
+    payload = request.get_json(silent=True) or {}
+    action = payload.get("action_type", "")
+    override_reason = str(payload.get("override_reason", "")).strip()
 
     if action not in {"ApproveShortPay", "OverridePayAsBilled"}:
-        flash("Choose a valid case action.", "error")
-        return redirect(url_for("dashboard.case_detail", invoice_id=invoice_id))
+        return jsonify({"detail": "Choose a valid case action."}), 400
     if action == "OverridePayAsBilled" and not override_reason:
-        flash("A reason is required to pay the invoice as billed.", "error")
-        return redirect(url_for("dashboard.case_detail", invoice_id=invoice_id))
+        return jsonify({"detail": "A reason is required to pay the invoice as billed."}), 400
+
+    expected_payable_cents = payload.get("expected_payable_cents")
+    if action == "ApproveShortPay":
+        if not isinstance(expected_payable_cents, int) or isinstance(expected_payable_cents, bool):
+            return jsonify({"detail": "Approve short-pay using the displayed payable."}), 400
 
     try:
         case = _api().get_case(invoice_id)
-        payload = {
-            "invoice_id": invoice_id,
-            "shipment_id": shipment_id,
-            "action_type": action,
-            "expected_payable_cents": case["expected_cents"],
-            "override_reason": override_reason,
-        }
-        result = _api().decide(payload)
+        result = _api().decide(
+            {
+                "invoice_id": invoice_id,
+                "shipment_id": case["shipment_id"],
+                "action_type": action,
+                "expected_payable_cents": expected_payable_cents or 0,
+                "override_reason": override_reason,
+            }
+        )
     except (KeyError, ShortpayAPIError) as exc:
-        flash(f"Decision failed: {exc}", "error")
-        return redirect(url_for("dashboard.case_detail", invoice_id=invoice_id))
+        if isinstance(exc, ShortpayAPIError):
+            return _api_error(exc)
+        return jsonify({"detail": f"Decision failed: {exc}"}), 502
 
-    flash(f"Case moved to {result['new_disposition']}.", "success")
-    return redirect(url_for("dashboard.board"))
+    return jsonify(result)
 
 
-@dashboard.post("/ingest")
+@dashboard.post("/api/ui/ingest")
 def ingest_invoice():
-    invoice_text = request.form.get("invoice_text", "").strip()
+    invoice_text = (request.get_json(silent=True) or {}).get("invoice_text", "").strip()
     if not invoice_text:
-        flash("Paste invoice text before running extraction.", "error")
-        return redirect(url_for("dashboard.board"))
+        return jsonify({"detail": "Paste invoice text before running extraction."}), 400
 
     try:
         result = _api().ingest_invoice(invoice_text)
     except ShortpayAPIError as exc:
-        flash(str(exc), "error")
-        return redirect(url_for("dashboard.board"))
+        return _api_error(exc)
 
-    flash(
-        f"{result['invoice_id']} extracted through {result['provider']} and matched.",
-        "success",
-    )
-    return redirect(url_for("dashboard.case_detail", invoice_id=result["invoice_id"]))
+    return jsonify(result), 201
 
 
 @dashboard.get("/healthz")

@@ -17,8 +17,4 @@ def create_app(config: dict | None = None, *, api_client=None) -> Flask:
     )
     app.register_blueprint(dashboard)
 
-    @app.template_filter("money")
-    def format_money(cents: int | None) -> str:
-        return f"${(cents or 0) / 100:,.2f}"
-
     return app

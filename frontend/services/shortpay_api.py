@@ -4,7 +4,19 @@ import requests
 
 
 class ShortpayAPIError(RuntimeError):
-    """A safe, user-facing FastAPI communication error."""
+    def __init__(self, detail: str, status_code: int | None = None) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+
+
+def _detail_from_response(response, fallback: str) -> str:
+    try:
+        detail = response.json().get("detail", fallback)
+    except ValueError:
+        return fallback
+    if isinstance(detail, str) and detail.strip():
+        return detail
+    return fallback
 
 
 class ShortpayAPI:
@@ -25,12 +37,10 @@ class ShortpayAPI:
         except requests.RequestException as exc:
             detail = "FastAPI is unavailable. Start the backend and try again."
             response = getattr(exc, "response", None)
+            status_code = getattr(response, "status_code", None)
             if response is not None:
-                try:
-                    detail = response.json().get("detail", detail)
-                except ValueError:
-                    pass
-            raise ShortpayAPIError(detail) from exc
+                detail = _detail_from_response(response, detail)
+            raise ShortpayAPIError(detail, status_code=status_code) from exc
 
         try:
             return response.json()

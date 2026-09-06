@@ -1,8 +1,7 @@
-import re
-
 import pytest
 
 from frontend import create_app
+from frontend.services.shortpay_api import ShortpayAPIError
 
 
 CASE = {
@@ -52,7 +51,23 @@ class FakeShortpayAPI:
 
     def decide(self, payload):
         self.decisions.append(payload)
-        return {"status": "success", "new_disposition": "ShortPaid"}
+        if (
+            payload.get("action_type") == "ApproveShortPay"
+            and payload.get("expected_payable_cents") != CASE["expected_cents"]
+        ):
+            raise ShortpayAPIError(
+                "Stale payable: requested amount does not match the matcher.",
+                status_code=400,
+            )
+        return {
+            "status": "success",
+            "new_disposition": "ShortPaid",
+            "erp_proposal": {"authorized_amount_cents": CASE["expected_cents"]},
+            "dispute_packet": {
+                "disputed_total_cents": CASE["dispute_cents"],
+                "attached_evidence": ["dock_receipt_SHP-88220.pdf"],
+            },
+        }
 
     def ingest_invoice(self, invoice_text):
         self.ingested_text = invoice_text
@@ -66,100 +81,105 @@ def frontend_client():
     return app.test_client(), api
 
 
-def test_board_renders_prd_columns_and_case(frontend_client):
-    client, _ = frontend_client
-    response = client.get("/")
-
-    assert response.status_code == 200
-    assert b"Major exceptions" in response.data
-    assert b"FedEx Freight" in response.data
-    assert b"Overbilled by $195.00" in response.data
-    assert b"Protect every payable" in response.data
-    assert b"At-risk spend" in response.data
-    assert b"Upload PDF" in response.data
-    assert b"PDF extraction is UI-only for now" in response.data
-    assert b'data-theme="light"' in response.data
-    assert b"Light desk" in response.data
-    assert b"data-theme-toggle" in response.data
-
-
 @pytest.mark.parametrize("path", ["/", "/cases/INV-FRT-2026-09"])
-def test_shared_theme_markup(frontend_client, path):
+def test_react_shell_is_served_for_application_routes(frontend_client, path):
     client, _ = frontend_client
-    html = client.get(path).get_data(as_text=True)
-    assert 'data-theme="light"' in html
-    assert 'aria-pressed="false"' in html
-    assert 'aria-label="Switch to dark color theme"' in html
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert b'data-theme="light"' in response.data
+    assert b'<div id="root"></div>' in response.data
+    assert b"react/assets/index.css" in response.data
+    assert b"react/assets/main.js" in response.data
+
+
+def test_react_shell_restores_theme_before_loading_assets(frontend_client):
+    client, _ = frontend_client
+    html = client.get("/").get_data(as_text=True)
     assert html.index("localStorage.getItem('shortpay-theme')") < html.index('rel="stylesheet"')
-    assert "localStorage.setItem('shortpay-theme', theme)" in html
-    assert "window.Motion" not in html
-    assert '<script src=' not in html
 
 
-def test_light_theme_overrides_every_shared_gradient(frontend_client):
+def test_list_cases_proxies_fastapi_data_as_json(frontend_client):
     client, _ = frontend_client
-    response = client.get("/static/styles.css")
-    assert response.status_code == 200
-    # This stylesheet uses flat rule blocks; check each shared gradient selector
-    # has an explicit solid light-theme background, including interaction states.
-    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", response.get_data(as_text=True))
-    light_backgrounds = set()
-    gradient_selectors = set()
-    prefix = ':root[data-theme="light"] '
-    for selectors, declarations in rules:
-        for selector in selectors.split(","):
-            selector = selector.strip()
-            if selector.startswith(prefix):
-                assert "gradient(" not in declarations
-                if "background:" in declarations:
-                    light_backgrounds.add(selector.removeprefix(prefix))
-            elif "gradient(" in declarations:
-                gradient_selectors.add(selector)
-    assert gradient_selectors
-    assert gradient_selectors <= light_backgrounds
-
-
-def test_case_detail_renders_locked_math(frontend_client):
-    client, _ = frontend_client
-    response = client.get("/cases/INV-FRT-2026-09")
+    response = client.get("/api/ui/cases")
 
     assert response.status_code == 200
-    assert b"$1,120.00" in response.data
-    assert b"$925.00" in response.data
-    assert b"$195.00" in response.data
-    assert b"93 min" in response.data
-    assert b"Evidence matched" in response.data
-    assert b"Approve short-pay" in response.data
+    assert response.is_json
+    assert response.json == [CASE]
 
 
-def test_approve_uses_backend_expected_amount(frontend_client):
+def test_case_detail_proxies_locked_math_as_json(frontend_client):
+    client, _ = frontend_client
+    response = client.get("/api/ui/cases/INV-FRT-2026-09")
+
+    assert response.status_code == 200
+    assert response.is_json
+    assert response.json["expected_cents"] == 92500
+    assert response.json["dwell_minutes"] == 93
+
+
+def test_approve_forwards_displayed_payable(frontend_client):
     client, api = frontend_client
     response = client.post(
-        "/cases/INV-FRT-2026-09/decide",
-        data={"shipment_id": "SHP-88220", "action_type": "ApproveShortPay"},
+        "/api/ui/cases/INV-FRT-2026-09/decide",
+        json={"action_type": "ApproveShortPay", "expected_payable_cents": 92500},
     )
 
-    assert response.status_code == 302
+    assert response.status_code == 200
+    assert response.json["new_disposition"] == "ShortPaid"
     assert api.decisions[0]["expected_payable_cents"] == 92500
+    assert api.decisions[0]["shipment_id"] == "SHP-88220"
+
+
+def test_approve_does_not_replace_displayed_payable(frontend_client):
+    client, api = frontend_client
+    response = client.post(
+        "/api/ui/cases/INV-FRT-2026-09/decide",
+        json={"action_type": "ApproveShortPay", "expected_payable_cents": 90000},
+    )
+
+    assert response.status_code == 400
+    assert api.decisions[0]["expected_payable_cents"] == 90000
+    assert "Stale payable" in response.json["detail"]
+
+
+def test_approve_requires_displayed_payable(frontend_client):
+    client, api = frontend_client
+    response = client.post(
+        "/api/ui/cases/INV-FRT-2026-09/decide",
+        json={"action_type": "ApproveShortPay"},
+    )
+
+    assert response.status_code == 400
+    assert response.json["detail"] == "Approve short-pay using the displayed payable."
+    assert api.decisions == []
 
 
 def test_override_requires_reason(frontend_client):
     client, api = frontend_client
     response = client.post(
-        "/cases/INV-FRT-2026-09/decide",
-        data={"shipment_id": "SHP-88220", "action_type": "OverridePayAsBilled"},
-        follow_redirects=True,
+        "/api/ui/cases/INV-FRT-2026-09/decide",
+        json={"shipment_id": "SHP-88220", "action_type": "OverridePayAsBilled"},
     )
 
-    assert response.status_code == 200
-    assert b"A reason is required" in response.data
+    assert response.status_code == 400
+    assert response.json["detail"] == "A reason is required to pay the invoice as billed."
     assert api.decisions == []
 
 
 def test_demo_ingest_calls_sponsor_api(frontend_client):
     client, api = frontend_client
-    response = client.post("/ingest", data={"invoice_text": "carrier invoice"})
+    response = client.post("/api/ui/ingest", json={"invoice_text": "carrier invoice"})
 
-    assert response.status_code == 302
+    assert response.status_code == 201
     assert api.ingested_text == "carrier invoice"
-    assert response.headers["Location"].endswith("/cases/INV-FRT-2026-09")
+    assert response.json["invoice_id"] == "INV-FRT-2026-09"
+
+
+def test_ingest_rejects_blank_invoice_text(frontend_client):
+    client, api = frontend_client
+    response = client.post("/api/ui/ingest", json={"invoice_text": "  "})
+
+    assert response.status_code == 400
+    assert response.json["detail"] == "Paste invoice text before running extraction."
+    assert api.ingested_text is None

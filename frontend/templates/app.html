@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f7f6f2">
+    <title>Shortpay · Freight audit desk</title>
+    <script>
+      (() => {
+        try {
+          const theme = window.localStorage.getItem('shortpay-theme');
+          if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme;
+        } catch (_) {}
+      })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='react/assets/index.css') }}">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="{{ url_for('static', filename='react/assets/main.js') }}"></script>
+  </body>
+</html>
