@@ -9,10 +9,20 @@
   <body>
     <header class="site-header">
       <a class="brand" href="{{ url_for('dashboard.board') }}">
-        <span class="brand-mark">S</span>
-        <span><strong>Shortpay</strong><small>Freight audit desk</small></span>
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+            <path d="M5 9.5h14v11H5zM19 13h4.6l3.4 4v3.5H19z" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>
+            <circle cx="10" cy="23" r="2.5" stroke="currentColor" stroke-width="2.1"/>
+            <circle cx="23" cy="23" r="2.5" stroke="currentColor" stroke-width="2.1"/>
+            <path d="M5 20.5h2.5M12.5 20.5h8M25.5 20.5H27" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span class="brand-copy"><strong>Shortpay</strong><small>Freight audit desk</small></span>
       </a>
-      <span class="status"><span class="status-dot"></span> Audit service</span>
+      <div class="header-meta">
+        <span class="header-context">Pre-pay control room</span>
+        <span class="status"><span class="status-dot"></span> Audit service online</span>
+      </div>
     </header>
 
     <main class="page-shell">
@@ -23,5 +33,6 @@
       {% endwith %}
       {% block content %}{% endblock %}
     </main>
+    {% block scripts %}{% endblock %}
   </body>
 </html>

@@ -72,6 +72,10 @@ def test_board_renders_prd_columns_and_case(frontend_client):
     assert b"Major exceptions" in response.data
     assert b"FedEx Freight" in response.data
     assert b"Overbilled by $195.00" in response.data
+    assert b"Protect every payable" in response.data
+    assert b"At-risk spend" in response.data
+    assert b"Upload PDF" in response.data
+    assert b"PDF extraction is UI-only for now" in response.data
 
 
 def test_case_detail_renders_locked_math(frontend_client):
@@ -83,6 +87,8 @@ def test_case_detail_renders_locked_math(frontend_client):
     assert b"$925.00" in response.data
     assert b"$195.00" in response.data
     assert b"93 min" in response.data
+    assert b"Evidence matched" in response.data
+    assert b"Approve short-pay" in response.data
 
 
 def test_approve_uses_backend_expected_amount(frontend_client):
