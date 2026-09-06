@@ -72,6 +72,26 @@ def test_board_renders_prd_columns_and_case(frontend_client):
     assert b"Major exceptions" in response.data
     assert b"FedEx Freight" in response.data
     assert b"Overbilled by $195.00" in response.data
+    assert b"Protect every payable" in response.data
+    assert b"At-risk spend" in response.data
+    assert b"Upload PDF" in response.data
+    assert b"PDF extraction is UI-only for now" in response.data
+    assert b'data-theme="light"' in response.data
+    assert b"Light desk" in response.data
+    assert b"data-theme-toggle" in response.data
+
+
+@pytest.mark.parametrize("path", ["/", "/cases/INV-FRT-2026-09"])
+def test_shared_theme_markup(frontend_client, path):
+    client, _ = frontend_client
+    html = client.get(path).get_data(as_text=True)
+    assert 'data-theme="light"' in html
+    assert 'aria-pressed="false"' in html
+    assert 'aria-label="Switch to dark color theme"' in html
+    assert html.index("localStorage.getItem('shortpay-theme')") < html.index('rel="stylesheet"')
+    assert "localStorage.setItem('shortpay-theme', theme)" in html
+    assert "window.Motion" not in html
+    assert '<script src=' not in html
 
 
 def test_case_detail_renders_locked_math(frontend_client):
@@ -83,6 +103,8 @@ def test_case_detail_renders_locked_math(frontend_client):
     assert b"$925.00" in response.data
     assert b"$195.00" in response.data
     assert b"93 min" in response.data
+    assert b"Evidence matched" in response.data
+    assert b"Approve short-pay" in response.data
 
 
 def test_approve_uses_backend_expected_amount(frontend_client):

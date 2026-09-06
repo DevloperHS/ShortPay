@@ -2,35 +2,96 @@
 {% block title %}Audit board · Shortpay{% endblock %}
 
 {% block content %}
-  <section class="hero">
-    <div>
-      <p class="eyebrow">Weekend freight audit</p>
-      <h1>Review exceptions before money leaves.</h1>
-      <p class="hero-copy">Matched invoices, evidence-backed adjustments, and one clear approval queue.</p>
+  {% set exception_cases = grouped.get('Major exceptions', []) %}
+  {% set exception_value = exception_cases|map(attribute='dispute_cents')|sum %}
+  <section class="hero hero-shell">
+    <div class="hero-copy-block">
+      <p class="eyebrow"><span class="eyebrow-dot"></span>Weekend freight audit</p>
+      <h1>Protect every payable<br>before it leaves.</h1>
+      <p class="hero-copy">Evidence-backed freight adjustments, organized into one calm approval queue.</p>
     </div>
-    <div class="hero-stat">
-      <span>Open exceptions</span>
-      <strong>{{ grouped.get('Major exceptions', [])|length }}</strong>
+    <div class="hero-metrics" aria-label="Audit queue summary">
+      <article class="hero-stat inset-stat">
+        <span>Open exceptions</span>
+        <strong>{{ exception_cases|length }}</strong>
+        <small>Need controller review</small>
+      </article>
+      <article class="hero-stat savings-stat">
+        <span>At-risk spend</span>
+        <strong>{{ exception_value|money }}</strong>
+        <small>Detected before payment</small>
+      </article>
     </div>
   </section>
 
-  <details class="demo-tools">
-    <summary>Demo controls · Sponsor extraction</summary>
-    <form method="post" action="{{ url_for('dashboard.ingest_invoice') }}">
-      <label for="invoice_text">Invoice text</label>
-      <textarea id="invoice_text" name="invoice_text" rows="5" placeholder="Paste carrier invoice text here…" required></textarea>
-      <div class="form-footer">
-        <small>TensorMux primary · Groq fallback · Maximum 60 requests/provider/minute</small>
-        <button class="button button-secondary" type="submit">Extract and match</button>
+  <details class="demo-tools" open>
+    <summary><span>Import carrier invoice</span><small>Demo controls · Sponsor extraction</small></summary>
+    <div class="import-panel">
+      <div class="import-tabs" role="tablist" aria-label="Invoice import method">
+        <button class="import-tab is-active" id="paste-tab" type="button" role="tab" aria-selected="true" aria-controls="paste-panel" data-import-tab="paste-panel">Paste invoice text</button>
+        <button class="import-tab" id="upload-tab" type="button" role="tab" aria-selected="false" aria-controls="upload-panel" data-import-tab="upload-panel">Upload PDF <span>Preview</span></button>
       </div>
-    </form>
+
+      <div class="import-panels-wrapper">
+        <section class="import-tab-panel is-active" id="paste-panel" role="tabpanel" aria-labelledby="paste-tab">
+          <form method="post" action="{{ url_for('dashboard.ingest_invoice') }}" class="paste-form">
+            <div class="paste-field-wrap">
+              <label for="invoice_text">Invoice text</label>
+              <textarea id="invoice_text" name="invoice_text" placeholder="Paste carrier invoice text here…" required></textarea>
+            </div>
+            <div class="form-footer">
+              <small>TensorMux primary · Groq fallback · Maximum 60 requests/provider/minute</small>
+              <button class="button button-secondary" type="submit">Extract and match</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="import-tab-panel" id="upload-panel" role="tabpanel" aria-labelledby="upload-tab" hidden>
+          <div class="pdf-upload-flow" data-upload-flow>
+            <div class="pdf-upload-body">
+              <div class="drop-zone" data-drop-zone>
+                <input class="file-input" id="invoice_pdf" type="file" accept="application/pdf,.pdf" data-pdf-input>
+                <div class="upload-icon" aria-hidden="true">
+                  <svg viewBox="0 0 32 32" fill="none"><path d="M9 3.5h9l5 5V28.5H9z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M18 3.5v6h5M16 23V13m0 0-3.5 3.5M16 13l3.5 3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <strong>Drop a carrier invoice here</strong>
+                <span>or <label for="invoice_pdf">browse for a PDF</label></span>
+                <small>PDF only · Up to 15 MB</small>
+              </div>
+
+              <div class="file-selected" data-file-selected hidden>
+                <span class="pdf-file-icon" aria-hidden="true">PDF</span>
+                <div><strong data-file-name>Invoice.pdf</strong><small data-file-size>0 KB</small></div>
+                <button class="icon-button" type="button" data-remove-file aria-label="Remove selected PDF">×</button>
+              </div>
+
+              <div class="upload-progress" data-upload-progress hidden aria-live="polite">
+                <div class="progress-header"><span data-progress-label>Uploading securely</span><strong data-progress-value>0%</strong></div>
+                <div class="progress-track"><span data-progress-bar></span></div>
+              </div>
+
+              <ol class="processing-steps" data-processing-steps aria-live="polite">
+                <li data-step="upload"><span>1</span><div><strong>Upload invoice</strong><small>Choose a carrier PDF</small></div><i></i></li>
+                <li data-step="processing"><span>2</span><div><strong>Extract invoice data</strong><small>Awaiting secure upload</small></div><i></i></li>
+                <li data-step="complete"><span>3</span><div><strong>Ready for matching</strong><small>Review will begin when extraction is connected</small></div><i></i></li>
+              </ol>
+            </div>
+
+            <div class="pdf-flow-footer">
+              <small><span class="preview-pill">Preview flow</span> PDF extraction is UI-only for now. No document is sent or stored.</small>
+              <button class="button button-primary" type="button" data-start-upload disabled>Upload and prepare <span>→</span></button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
   </details>
 
   <section class="board" aria-label="Freight audit cases">
     {% for column in columns %}
       <div class="board-column">
         <header class="column-header">
-          <h2>{{ column }}</h2>
+          <h2><span class="column-indicator indicator-{{ loop.index }}"></span>{{ column }}</h2>
           <span>{{ grouped.get(column, [])|length }}</span>
         </header>
 
@@ -38,21 +99,160 @@
           {% for case in grouped.get(column, []) %}
             <a class="case-card disposition-{{ case.disposition|lower }}" href="{{ url_for('dashboard.case_detail', invoice_id=case.invoice_id) }}">
               <div class="case-topline">
-                <span class="case-carrier">{{ case.carrier_name }}</span>
-                <span class="arrow">→</span>
+                <span class="case-carrier"><span class="carrier-glyph">{{ case.carrier_name[0] }}</span>{{ case.carrier_name }}</span>
+                <span class="arrow" aria-hidden="true">↗</span>
               </div>
-              <strong>{{ case.shipment_id }}</strong>
-              <p>{{ case.skip_reason or case.kanban.subtitle }}</p>
+              <strong>{{ case.shipment_id }} <small>{{ case.invoice_id }}</small></strong>
+              <p>{{ case.kanban.subtitle }}</p>
               <div class="case-money">
-                <span>Billed {{ case.billed_cents|money }}</span>
-                <span class="variance">{{ case.dispute_cents|money }} variance</span>
+                <span><small>Invoice</small>Billed {{ case.billed_cents|money }}</span>
+                <span class="variance"><small>Variance</small>{{ case.dispute_cents|money }}</span>
               </div>
             </a>
           {% else %}
-            <div class="empty-state">No cases</div>
+            <div class="empty-state"><span aria-hidden="true">—</span>No cases in this lane</div>
           {% endfor %}
         </div>
       </div>
     {% endfor %}
   </section>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    (() => {
+      const tabs = document.querySelectorAll('[data-import-tab]');
+      const panels = document.querySelectorAll('.import-tab-panel');
+      let isSwitching = false;
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const easeOut = 'cubic-bezier(0.23, 1, 0.32, 1)';
+      const animate = (element, keyframes, duration) => {
+        if (!element || window.matchMedia('(prefers-reduced-motion: reduce)').matches || typeof element.animate !== 'function') return Promise.resolve();
+        const animation = element.animate(keyframes, { duration, easing: easeOut, fill: 'both' });
+        return animation.finished.catch(() => {}).finally(() => animation.cancel());
+      };
+
+      tabs.forEach((tab) => tab.addEventListener('click', async () => {
+        if (tab.classList.contains('is-active') || isSwitching) return;
+        isSwitching = true;
+
+        const targetId = tab.dataset.importTab;
+        const targetPanel = document.getElementById(targetId);
+        const currentPanel = document.querySelector('.import-tab-panel.is-active');
+
+        tabs.forEach((item) => {
+          const active = item === tab;
+          item.classList.toggle('is-active', active);
+          item.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+
+        if (currentPanel && targetPanel) {
+          await animate(
+            currentPanel,
+            reducedMotion
+              ? [{ opacity: 1 }, { opacity: 0 }]
+              : [{ opacity: 1, transform: 'translateY(0) scale(1)' }, { opacity: 0, transform: 'translateY(-4px) scale(0.995)' }],
+            reducedMotion ? 100 : 140
+          );
+
+          currentPanel.hidden = true;
+          currentPanel.classList.remove('is-active');
+          currentPanel.style.opacity = '';
+          currentPanel.style.transform = '';
+
+          targetPanel.hidden = false;
+          targetPanel.classList.add('is-active');
+
+          await animate(
+            targetPanel,
+            reducedMotion
+              ? [{ opacity: 0 }, { opacity: 1 }]
+              : [{ opacity: 0, transform: 'translateY(4px) scale(0.995)' }, { opacity: 1, transform: 'translateY(0) scale(1)' }],
+            reducedMotion ? 120 : 200
+          );
+          targetPanel.style.opacity = '';
+          targetPanel.style.transform = '';
+        } else {
+          panels.forEach((panel) => {
+            const active = panel.id === targetId;
+            panel.classList.toggle('is-active', active);
+            panel.hidden = !active;
+          });
+        }
+
+        isSwitching = false;
+      }));
+
+      const flow = document.querySelector('[data-upload-flow]');
+      if (!flow) return;
+      const input = flow.querySelector('[data-pdf-input]');
+      const dropZone = flow.querySelector('[data-drop-zone]');
+      const selected = flow.querySelector('[data-file-selected]');
+      const fileName = flow.querySelector('[data-file-name]');
+      const fileSize = flow.querySelector('[data-file-size]');
+      const remove = flow.querySelector('[data-remove-file]');
+      const start = flow.querySelector('[data-start-upload]');
+      const progress = flow.querySelector('[data-upload-progress]');
+      const progressLabel = flow.querySelector('[data-progress-label]');
+      const progressValue = flow.querySelector('[data-progress-value]');
+      const progressBar = flow.querySelector('[data-progress-bar]');
+      let selectedFile;
+
+      const setStep = (name, status) => flow.querySelector(`[data-step="${name}"]`).dataset.status = status;
+      const selectFile = (file) => {
+        if (!file || (file.type && file.type !== 'application/pdf') && !file.name.toLowerCase().endsWith('.pdf')) return;
+        selectedFile = file;
+        fileName.textContent = file.name;
+        fileSize.textContent = `${Math.max(1, Math.round(file.size / 1024))} KB · PDF document`;
+        selected.hidden = false;
+        dropZone.hidden = true;
+        start.disabled = false;
+        setStep('upload', 'complete');
+        setStep('processing', 'pending');
+        setStep('complete', 'pending');
+        animate(
+          selected,
+          reducedMotion ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, transform: 'scale(0.98)' }, { opacity: 1, transform: 'scale(1)' }],
+          reducedMotion ? 120 : 200
+        );
+      };
+      input.addEventListener('change', () => selectFile(input.files[0]));
+      ['dragenter', 'dragover'].forEach((event) => dropZone.addEventListener(event, (e) => { e.preventDefault(); dropZone.classList.add('is-dragging'); }));
+      ['dragleave', 'drop'].forEach((event) => dropZone.addEventListener(event, (e) => { e.preventDefault(); dropZone.classList.remove('is-dragging'); }));
+      dropZone.addEventListener('drop', (event) => selectFile(event.dataTransfer.files[0]));
+      remove.addEventListener('click', () => {
+        selectedFile = undefined;
+        input.value = '';
+        selected.hidden = true;
+        dropZone.hidden = false;
+        start.disabled = true;
+        progress.hidden = true;
+        ['upload', 'processing', 'complete'].forEach((step) => setStep(step, ''));
+        animate(
+          dropZone,
+          reducedMotion ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, transform: 'scale(0.98)' }, { opacity: 1, transform: 'scale(1)' }],
+          reducedMotion ? 120 : 200
+        );
+      });
+      start.addEventListener('click', () => {
+        if (!selectedFile) return;
+        start.disabled = true;
+        progress.hidden = false;
+        setStep('processing', 'active');
+        let value = 0;
+        const timer = window.setInterval(() => {
+          value = Math.min(value + 10, 100);
+          progressValue.textContent = `${value}%`;
+          progressBar.style.width = `${value}%`;
+          if (value === 100) {
+            window.clearInterval(timer);
+            progressLabel.textContent = 'PDF prepared locally';
+            setStep('processing', 'complete');
+            setStep('complete', 'complete');
+            start.textContent = 'PDF ready for extraction';
+          }
+        }, 85);
+      });
+    })();
+  </script>
 {% endblock %}

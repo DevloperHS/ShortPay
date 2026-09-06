@@ -2,36 +2,69 @@
 {% block title %}{{ case.shipment_id }} · Shortpay{% endblock %}
 
 {% block content %}
-  <a class="back-link" href="{{ url_for('dashboard.board') }}">← Back to audit board</a>
+  <a class="back-link" href="{{ url_for('dashboard.board') }}"><span aria-hidden="true">←</span> Audit board</a>
 
-  <section class="case-heading">
+  <section class="case-heading case-heading-shell">
     <div>
-      <p class="eyebrow">{{ case.disposition }}</p>
-      <h1>{{ case.carrier_name }} · {{ case.shipment_id }}</h1>
+      <p class="eyebrow"><span class="eyebrow-dot"></span>{{ case.disposition|replace('NeedsReview', 'Controller review')|replace('ShortPaid', 'Short-paid')|replace('PaidAsBilled', 'Paid as billed') }}</p>
+      <h1>{{ case.carrier_name }} <span>·</span> {{ case.shipment_id }}</h1>
       <p>{{ case.invoice_id }} · BOL {{ case.bill_of_lading }}</p>
     </div>
     <div class="variance-callout">
-      <span>Overbilled</span>
+      <span>Potential short-pay</span>
       <strong>{{ case.dispute_cents|money }}</strong>
+      <small>Evidence-backed variance</small>
     </div>
   </section>
 
   <section class="summary-grid">
-    <article><span>Carrier billed</span><strong>{{ case.billed_cents|money }}</strong></article>
-    <article><span>Authorized payable</span><strong>{{ case.expected_cents|money }}</strong></article>
-    <article class="accent"><span>Dispute amount</span><strong>{{ case.dispute_cents|money }}</strong></article>
+    <article class="summary-card summary-billed">
+      <span class="summary-icon" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="1" x2="12" y2="23"/>
+          <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+        </svg>
+      </span>
+      <div>
+        <span>Carrier billed</span>
+        <strong>{{ case.billed_cents|money }}</strong>
+      </div>
+    </article>
+    <article class="summary-card summary-authorized">
+      <span class="summary-icon" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+      </span>
+      <div>
+        <span>Authorized payable</span>
+        <strong>{{ case.expected_cents|money }}</strong>
+      </div>
+    </article>
+    <article class="summary-card summary-dispute accent">
+      <span class="summary-icon" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="8" y1="12" x2="16" y2="12"/>
+        </svg>
+      </span>
+      <div>
+        <span>Dispute amount</span>
+        <strong>{{ case.dispute_cents|money }}</strong>
+      </div>
+    </article>
   </section>
 
   <section class="panel">
     <div class="panel-heading">
-      <div><p class="eyebrow">Evidence-backed math</p><h2>Charge review</h2></div>
-      <span class="evidence-badge">Evidence matched</span>
+      <div><p class="eyebrow">Evidence-backed math</p><h2>Charge review</h2><small>Contract, dock log, facility master, and carrier invoice</small></div>
+      <span class="evidence-badge"><span class="status-dot"></span>Evidence matched</span>
     </div>
 
     <div class="dwell-strip">
-      <div><span>Total dwell</span><strong>{{ case.dwell_minutes }} min</strong></div>
-      <div><span>Billable detention</span><strong>{{ case.billable_detention_minutes }} min</strong></div>
-      <div><span>Completed hours</span><strong>{{ case.completed_detention_hours }}</strong></div>
+      <div><span>Total dwell</span><strong>{{ case.dwell_minutes }} min</strong><small>Dock clock duration</small></div>
+      <div><span>Billable detention</span><strong>{{ case.billable_detention_minutes }} min</strong><small>After free time</small></div>
+      <div><span>Completed hours</span><strong>{{ case.completed_detention_hours }}</strong><small>At contract rate</small></div>
     </div>
 
     <div class="table-wrap">
@@ -54,11 +87,12 @@
 
   {% if case.disposition == 'NeedsReview' %}
     <section class="decision-panel">
+      <div class="decision-eyebrow"><span class="status-dot"></span>Recommended controller action</div>
       <form method="post" action="{{ url_for('dashboard.decide', invoice_id=case.invoice_id) }}">
         <input type="hidden" name="shipment_id" value="{{ case.shipment_id }}">
         <input type="hidden" name="action_type" value="ApproveShortPay">
-        <div><span>Recommended action</span><strong>Pay {{ case.expected_cents|money }} and dispute {{ case.dispute_cents|money }}</strong></div>
-        <button class="button button-primary" type="submit">Approve {{ case.expected_cents|money }} short-pay</button>
+        <div><span>Proposed ERP payable</span><strong>Pay {{ case.expected_cents|money }} <em>·</em> dispute {{ case.dispute_cents|money }}</strong><small>Creates a carrier short-pay notice with the dock receipt attached.</small></div>
+        <button class="button button-primary" type="submit">Approve short-pay <span>→</span></button>
       </form>
 
       <details class="override">
@@ -73,6 +107,6 @@
       </details>
     </section>
   {% else %}
-    <div class="completed-banner">This case is complete: {{ case.disposition }}.</div>
+    <div class="completed-banner"><span>✓</span><div><strong>Case complete</strong><small>This invoice is in the {{ case.disposition }} disposition.</small></div></div>
   {% endif %}
 {% endblock %}
