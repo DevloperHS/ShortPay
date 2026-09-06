@@ -1,9 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Shortpay{% endblock %}</title>
+    <script>
+      (() => {
+        try {
+          const theme = window.localStorage.getItem('shortpay-theme');
+          if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme;
+        } catch (_) {}
+      })();
+    </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   </head>
   <body>
@@ -22,6 +30,12 @@
       <div class="header-meta">
         <span class="header-context">Pre-pay control room</span>
         <span class="status"><span class="status-dot"></span> Audit service online</span>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark color theme" aria-pressed="false">
+          <span class="theme-toggle-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v2.25M12 19.75V22M2 12h2.25M19.75 12H22M4.93 4.93l1.59 1.59M17.48 17.48l1.59 1.59M19.07 4.93l-1.59 1.59M6.52 17.48l-1.59 1.59"/></svg>
+          </span>
+          <span data-theme-label>Light desk</span>
+        </button>
       </div>
     </header>
 
@@ -34,5 +48,26 @@
       {% block content %}{% endblock %}
     </main>
     {% block scripts %}{% endblock %}
+    <script>
+      (() => {
+        const toggle = document.querySelector('[data-theme-toggle]');
+        if (!toggle) return;
+        const label = toggle.querySelector('[data-theme-label]');
+        const applyTheme = (theme) => {
+          document.documentElement.dataset.theme = theme;
+          const isDark = theme === 'dark';
+          toggle.setAttribute('aria-pressed', String(isDark));
+          toggle.setAttribute('aria-label', `Switch to ${isDark ? 'light' : 'dark'} color theme`);
+          label.textContent = isDark ? 'Dark desk' : 'Light desk';
+        };
+
+        applyTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
+        toggle.addEventListener('click', () => {
+          const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+          applyTheme(theme);
+          try { window.localStorage.setItem('shortpay-theme', theme); } catch (_) {}
+        });
+      })();
+    </script>
   </body>
 </html>

@@ -76,6 +76,9 @@ def test_board_renders_prd_columns_and_case(frontend_client):
     assert b"At-risk spend" in response.data
     assert b"Upload PDF" in response.data
     assert b"PDF extraction is UI-only for now" in response.data
+    assert b'data-theme="light"' in response.data
+    assert b"Light desk" in response.data
+    assert b"data-theme-toggle" in response.data
 
 
 def test_case_detail_renders_locked_math(frontend_client):

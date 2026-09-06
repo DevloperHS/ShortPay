@@ -119,12 +119,17 @@
 {% endblock %}
 
 {% block scripts %}
-  <script src="https://cdn.jsdelivr.net/npm/motion@11.11.17/dist/motion.js"></script>
   <script>
     (() => {
       const tabs = document.querySelectorAll('[data-import-tab]');
       const panels = document.querySelectorAll('.import-tab-panel');
       let isSwitching = false;
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const easeOut = 'cubic-bezier(0.23, 1, 0.32, 1)';
+      const animate = (element, keyframes, duration) => {
+        if (!element || typeof element.animate !== 'function') return Promise.resolve();
+        return element.animate(keyframes, { duration, easing: easeOut, fill: 'both' }).finished.catch(() => {});
+      };
 
       tabs.forEach((tab) => tab.addEventListener('click', async () => {
         if (tab.classList.contains('is-active') || isSwitching) return;
@@ -140,14 +145,14 @@
           item.setAttribute('aria-selected', active ? 'true' : 'false');
         });
 
-        if (window.Motion && typeof window.Motion.animate === 'function' && currentPanel && targetPanel) {
-          try {
-            await window.Motion.animate(
-              currentPanel,
-              { opacity: [1, 0], transform: ['translateY(0px) scale(1)', 'translateY(-4px) scale(0.995)'] },
-              { duration: 0.16, easing: 'ease-out' }
-            ).finished;
-          } catch (_) {}
+        if (currentPanel && targetPanel) {
+          await animate(
+            currentPanel,
+            reducedMotion
+              ? [{ opacity: 1 }, { opacity: 0 }]
+              : [{ opacity: 1, transform: 'translateY(0) scale(1)' }, { opacity: 0, transform: 'translateY(-4px) scale(0.995)' }],
+            reducedMotion ? 100 : 140
+          );
 
           currentPanel.hidden = true;
           currentPanel.classList.remove('is-active');
@@ -157,13 +162,15 @@
           targetPanel.hidden = false;
           targetPanel.classList.add('is-active');
 
-          try {
-            await window.Motion.animate(
-              targetPanel,
-              { opacity: [0, 1], transform: ['translateY(4px) scale(0.995)', 'translateY(0px) scale(1)'] },
-              { duration: 0.22, easing: [0.16, 1, 0.3, 1] }
-            ).finished;
-          } catch (_) {}
+          await animate(
+            targetPanel,
+            reducedMotion
+              ? [{ opacity: 0 }, { opacity: 1 }]
+              : [{ opacity: 0, transform: 'translateY(4px) scale(0.995)' }, { opacity: 1, transform: 'translateY(0) scale(1)' }],
+            reducedMotion ? 120 : 200
+          );
+          targetPanel.style.opacity = '';
+          targetPanel.style.transform = '';
         } else {
           panels.forEach((panel) => {
             const active = panel.id === targetId;
@@ -202,9 +209,11 @@
         setStep('upload', 'complete');
         setStep('processing', 'pending');
         setStep('complete', 'pending');
-        if (window.Motion && typeof window.Motion.animate === 'function') {
-          window.Motion.animate(selected, { opacity: [0, 1], transform: ['scale(0.98)', 'scale(1)'] }, { duration: 0.2 });
-        }
+        animate(
+          selected,
+          reducedMotion ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, transform: 'scale(0.98)' }, { opacity: 1, transform: 'scale(1)' }],
+          reducedMotion ? 120 : 200
+        );
       };
       input.addEventListener('change', () => selectFile(input.files[0]));
       ['dragenter', 'dragover'].forEach((event) => dropZone.addEventListener(event, (e) => { e.preventDefault(); dropZone.classList.add('is-dragging'); }));
@@ -218,9 +227,11 @@
         start.disabled = true;
         progress.hidden = true;
         ['upload', 'processing', 'complete'].forEach((step) => setStep(step, ''));
-        if (window.Motion && typeof window.Motion.animate === 'function') {
-          window.Motion.animate(dropZone, { opacity: [0, 1], transform: ['scale(0.98)', 'scale(1)'] }, { duration: 0.2 });
-        }
+        animate(
+          dropZone,
+          reducedMotion ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, transform: 'scale(0.98)' }, { opacity: 1, transform: 'scale(1)' }],
+          reducedMotion ? 120 : 200
+        );
       });
       start.addEventListener('click', () => {
         if (!selectedFile) return;
