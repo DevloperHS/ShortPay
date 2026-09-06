@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}{{ case.shipment_id }} · Shortpay{% endblock %}
+
+{% block content %}
+  <a class="back-link" href="{{ url_for('dashboard.board') }}">← Back to audit board</a>
+
+  <section class="case-heading">
+    <div>
+      <p class="eyebrow">{{ case.disposition }}</p>
+      <h1>{{ case.carrier_name }} · {{ case.shipment_id }}</h1>
+      <p>{{ case.invoice_id }} · BOL {{ case.bill_of_lading }}</p>
+    </div>
+    <div class="variance-callout">
+      <span>Overbilled</span>
+      <strong>{{ case.dispute_cents|money }}</strong>
+    </div>
+  </section>
+
+  <section class="summary-grid">
+    <article><span>Carrier billed</span><strong>{{ case.billed_cents|money }}</strong></article>
+    <article><span>Authorized payable</span><strong>{{ case.expected_cents|money }}</strong></article>
+    <article class="accent"><span>Dispute amount</span><strong>{{ case.dispute_cents|money }}</strong></article>
+  </section>
+
+  <section class="panel">
+    <div class="panel-heading">
+      <div><p class="eyebrow">Evidence-backed math</p><h2>Charge review</h2></div>
+      <span class="evidence-badge">Evidence matched</span>
+    </div>
+
+    <div class="dwell-strip">
+      <div><span>Total dwell</span><strong>{{ case.dwell_minutes }} min</strong></div>
+      <div><span>Billable detention</span><strong>{{ case.billable_detention_minutes }} min</strong></div>
+      <div><span>Completed hours</span><strong>{{ case.completed_detention_hours }}</strong></div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Charge</th><th>Evidence and rule</th><th>Billed</th><th>Authorized</th><th>Variance</th></tr></thead>
+        <tbody>
+          {% for line in case.lines %}
+            <tr>
+              <td><strong>{{ line.charge_type|replace('_', ' ')|title }}</strong></td>
+              <td>{{ line.explanation }}</td>
+              <td>{{ line.billed_cents|money }}</td>
+              <td>{{ line.expected_cents|money }}</td>
+              <td class="variance">{{ (line.billed_cents - line.expected_cents)|money }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% if case.disposition == 'NeedsReview' %}
+    <section class="decision-panel">
+      <form method="post" action="{{ url_for('dashboard.decide', invoice_id=case.invoice_id) }}">
+        <input type="hidden" name="shipment_id" value="{{ case.shipment_id }}">
+        <input type="hidden" name="action_type" value="ApproveShortPay">
+        <div><span>Recommended action</span><strong>Pay {{ case.expected_cents|money }} and dispute {{ case.dispute_cents|money }}</strong></div>
+        <button class="button button-primary" type="submit">Approve {{ case.expected_cents|money }} short-pay</button>
+      </form>
+
+      <details class="override">
+        <summary>Pay as billed instead</summary>
+        <form method="post" action="{{ url_for('dashboard.decide', invoice_id=case.invoice_id) }}">
+          <input type="hidden" name="shipment_id" value="{{ case.shipment_id }}">
+          <input type="hidden" name="action_type" value="OverridePayAsBilled">
+          <label for="override_reason">Override reason</label>
+          <textarea id="override_reason" name="override_reason" rows="3" required></textarea>
+          <button class="button button-secondary" type="submit">Confirm pay as billed</button>
+        </form>
+      </details>
+    </section>
+  {% else %}
+    <div class="completed-banner">This case is complete: {{ case.disposition }}.</div>
+  {% endif %}
+{% endblock %}
