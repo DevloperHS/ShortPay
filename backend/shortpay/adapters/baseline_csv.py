@@ -1,6 +1,17 @@
 import csv
+from decimal import Decimal, InvalidOperation
 from typing import List
 from shortpay.evidence import ContractFact, Mode
+
+
+def _parse_cents(value: str) -> int:
+    try:
+        cents = Decimal(value) * 100
+    except InvalidOperation as exc:
+        raise ValueError(f"Invalid monetary value: {value}") from exc
+    if cents != cents.to_integral_value():
+        raise ValueError(f"Monetary value has more than two decimal places: {value}")
+    return int(cents)
 
 
 def parse_baseline_csv(csv_filepath: str) -> List[ContractFact]:
@@ -12,11 +23,11 @@ def parse_baseline_csv(csv_filepath: str) -> List[ContractFact]:
             try:
                 mode_enum = Mode[mode_str]
             except KeyError:
-                mode_enum = Mode.OTHER if hasattr(Mode, "OTHER") else Mode.LTL
+                mode_enum = Mode.OTHER
 
-            agreed_base = int(float(row["agreed_base_rate"]) * 100)
+            agreed_base = _parse_cents(row["agreed_base_rate"])
+            detention_rate = _parse_cents(row["detention_rate_per_hour"])
             allowed_dwell = int(row["allowed_dwell_minutes"])
-            detention_rate = int(float(row["detention_rate_per_hour"]) * 100)
 
             contracts.append(
                 ContractFact(

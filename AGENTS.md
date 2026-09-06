@@ -12,3 +12,5 @@
    - Follow structured task playbooks (Feature Implementation, Bug Investigation, Refactoring).
    - Require empirical runtime proof (tests, build success, logs) before completing any task step.
    - Maintain clean context windows by delegating deep research tasks to the `research` subagent.
+
+Use AO worktrees; restore old sessions for unsaved work. Create feature/task-named PRs, summarize changes, ask before merging: yes=merge, no=refine.

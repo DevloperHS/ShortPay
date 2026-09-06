@@ -46,6 +46,31 @@ def test_api_decide_shortpay():
     assert res["status"] == "success"
     assert res["new_disposition"] == "ShortPaid"
     assert res["approved_payable_cents"] == 92500
+    assert res["erp_proposal"]["authorized_amount_cents"] == 92500
+    assert res["dispute_packet"]["disputed_total_cents"] == 19500
+    assert "dock_receipt_SHP-88220.pdf" in res["dispute_packet"]["attached_evidence"]
+
+
+def test_api_surfaces_ocean_skip_reason():
+    response = client.get("/api/cases")
+    assert response.status_code == 200
+    ocean = next(case for case in response.json() if case["shipment_id"] == "SHP-88219")
+    assert ocean["disposition"] == "SkippedOutOfScope"
+    assert ocean["kanban"]["column"] == "Out of scope"
+    assert "OCEAN" in ocean["skip_reason"]
+
+
+def test_api_rejects_blank_pay_as_billed_reason():
+    response = client.post(
+        "/api/decide",
+        json={
+            "invoice_id": "INV-FRT-2026-09",
+            "shipment_id": "SHP-88220",
+            "action_type": "OverridePayAsBilled",
+            "override_reason": "   ",
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_sponsor_ingest_route_connects_extraction_to_matcher(monkeypatch):
