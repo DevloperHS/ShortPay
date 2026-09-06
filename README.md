@@ -100,9 +100,13 @@ uv run uvicorn main:app --app-dir backend --reload --port 8000
 
 The server will automatically auto-ingest baseline fixtures on startup and serve API documentation at `http://localhost:8000/docs`.
 
-Launch the Flask UI in a second terminal:
+Build the React UI, then launch the Flask BFF in a second terminal:
 
 ```bash
+cd frontend/web
+npm install
+npm run build
+cd ../..
 uv run python -m frontend
 ```
 
@@ -110,7 +114,7 @@ The UI is available at `http://localhost:5000` and connects to the FastAPI backe
 
 ---
 
-## 🔌 API Endpoint Reference for Next.js Frontend
+## API endpoint reference
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |

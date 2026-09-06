@@ -30,5 +30,4 @@ def create_app(config: dict | None = None, *, api_client=None) -> Flask:
             return jsonify({"error": message}), 413
         flash(message, "error")
         return redirect(url_for("dashboard.board"))
-
     return app

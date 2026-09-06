@@ -5,7 +5,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 
-from shortpay import AuditOffice, CaseKey, ApproveShortPay, OverridePayAsBilled
+from shortpay import AuditOffice, CaseKey, ApproveShortPay, OverridePayAsBilled, ShortPaid
 from shortpay.adapters.baseline_csv import parse_baseline_csv
 from shortpay.adapters.dock_log import parse_dock_log_json
 from shortpay.adapters.facility_master import parse_facility_json
@@ -22,6 +22,38 @@ from shortpay.adapters.vault_hunter import discover_invoice_files
 from shortpay.neatlogs import tracer
 
 office = AuditOffice.in_memory()
+
+_RULE_LABELS = {
+    "LIFTGATE_DOCK_PRESENT": "Liftgate",
+    "DETENTION_HOURS": "Detention",
+    "BASE_RATE_MISMATCH": "Base rate",
+    "UNEXPLAINED_LINE": "Unexplained charge",
+}
+
+
+def _format_cents(cents: int) -> str:
+    sign = "-" if cents < 0 else ""
+    value = abs(cents)
+    return f"{sign}${value // 100}.{value % 100:02d}"
+
+
+_RULE_ORDER = (
+    "LIFTGATE_DOCK_PRESENT",
+    "DETENTION_HOURS",
+    "BASE_RATE_MISMATCH",
+    "UNEXPLAINED_LINE",
+)
+
+
+def _kanban_subtitle(match_result) -> str:
+    if match_result.dispute_total_cents <= 0:
+        return "Clean invoice"
+    fired = set(match_result.fired_rule_ids)
+    labels = [_RULE_LABELS[rule_id] for rule_id in _RULE_ORDER if rule_id in fired]
+    amount = _format_cents(match_result.dispute_total_cents)
+    if labels:
+        return f"Overbilled by {amount} ({' + '.join(labels)})"
+    return f"Overbilled by {amount}"
 
 
 def auto_ingest_fixtures():
@@ -54,7 +86,6 @@ def auto_ingest_fixtures():
                 emit_trace=False,
             )
         except KeyError:
-            # The Hunter can discover an invoice before the remaining evidence arrives.
             pass
 
 
@@ -74,7 +105,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Enable CORS for Next.js frontend (Shubhu)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -237,7 +267,6 @@ def get_kanban_cases() -> List[Dict[str, Any]]:
             color = "#F8F9FA"
 
         m = c.match_result
-        dispute_dollars = m.dispute_total_cents / 100.0
 
         results.append({
             "invoice_id": c.case_key.invoice_id,
@@ -254,7 +283,7 @@ def get_kanban_cases() -> List[Dict[str, Any]]:
                 "column": col,
                 "color": color,
                 "title": f"{c.carrier_name} - {c.case_key.shipment_id}",
-                "subtitle": f"Overbilled by ${dispute_dollars:.2f} (Liftgate + Detention)" if dispute_dollars > 0 else "Clean invoice",
+                "subtitle": _kanban_subtitle(m),
             }
         })
     return results
@@ -282,7 +311,7 @@ def get_case_detail(invoice_id: str) -> Dict[str, Any]:
             "explanation": exp.explanation,
         })
 
-    return {
+    payload = {
         "invoice_id": c.case_key.invoice_id,
         "shipment_id": c.case_key.shipment_id,
         "carrier_name": c.carrier_name,
@@ -290,6 +319,11 @@ def get_case_detail(invoice_id: str) -> Dict[str, Any]:
         "dwell_minutes": m.dwell_minutes,
         "billable_detention_minutes": m.billable_detention_minutes,
         "completed_detention_hours": m.completed_detention_hours,
+        "arrived_at": m.arrived_at,
+        "departed_at": m.departed_at,
+        "allowed_dwell_minutes": m.allowed_dwell_minutes,
+        "destination_has_dock": m.destination_has_dock,
+        "fired_rule_ids": m.fired_rule_ids,
         "billed_cents": m.billed_total_cents,
         "expected_cents": m.expected_total_cents,
         "dispute_cents": m.dispute_total_cents,
@@ -297,7 +331,15 @@ def get_case_detail(invoice_id: str) -> Dict[str, Any]:
         "skip_reason": getattr(c.disposition, "skip_reason", None),
         "policy_id": c.policy_id,
         "lines": lines_detail,
+        "erp_proposal": None,
+        "dispute_packet": None,
     }
+    if isinstance(c.disposition, ShortPaid):
+        erp_proposal = build_erp_proposal(c)
+        if erp_proposal is not None:
+            payload["erp_proposal"] = erp_proposal.model_dump()
+            payload["dispute_packet"] = build_dispute_packet(c).model_dump()
+    return payload
 
 
 @app.post("/api/decide")

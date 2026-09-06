@@ -1,6 +1,5 @@
-from typing import Optional, List, Union, Literal, Tuple
-from pydantic import BaseModel, Field, field_validator
-from shortpay.ledgers import LedgerJoin
+from typing import Optional, Union, Literal
+from pydantic import BaseModel, field_validator
 from shortpay.matching import MatchResult
 
 

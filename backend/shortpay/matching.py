@@ -17,6 +17,10 @@ class MatchResult(BaseModel):
     dwell_minutes: int = 0
     billable_detention_minutes: int = 0
     completed_detention_hours: int = 0
+    arrived_at: Optional[str] = None
+    departed_at: Optional[str] = None
+    allowed_dwell_minutes: int = 0
+    destination_has_dock: Optional[bool] = None
     billed_total_cents: int = 0
     expected_total_cents: int = 0
     dispute_total_cents: int = 0
@@ -35,7 +39,6 @@ def match_evidence(
     Pure function matcher over evidence facts.
     Has zero I/O and zero LLM calls.
     """
-    # Scope check: v1 only supports LTL and TL
     if contract.mode not in (Mode.LTL, Mode.TL):
         return MatchResult(
             is_out_of_scope=True,
@@ -96,7 +99,6 @@ def match_evidence(
                 ),
             )
         else:
-            # Unexplained or OTHER line items
             has_unexplained_lines = True
             expected_cents = 0
             exp_line = ExpectedLine(
@@ -125,6 +127,10 @@ def match_evidence(
         dwell_minutes=dwell,
         billable_detention_minutes=billable_detention_min,
         completed_detention_hours=completed_detention_hr,
+        arrived_at=dock.arrived_at,
+        departed_at=dock.departed_at,
+        allowed_dwell_minutes=allowed,
+        destination_has_dock=facility.destination_has_dock,
         billed_total_cents=billed_sum,
         expected_total_cents=expected_sum,
         dispute_total_cents=dispute_sum,

@@ -1,5 +1,7 @@
 # Environment and API Secrets
 backend/.env
+frontend/web/node_modules/
+frontend/static/react/
 *.env
 *.env.local
 *.env.*.local
@@ -20,6 +22,7 @@ htmlcov/
 
 # Antigravity / Agent CLI Scratch & Logs
 .agents/
+.audit/
 .gemini/
 scratch/
 *.log

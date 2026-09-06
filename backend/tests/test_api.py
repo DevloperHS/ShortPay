@@ -22,16 +22,25 @@ def test_api_auto_ingest_and_cases():
     assert hero["dispute_cents"] == 19500
     assert hero["disposition"] == "NeedsReview"
     assert hero["kanban"]["column"] == "Major exceptions"
+    assert hero["kanban"]["color"] == "#FCE8E6"
+    assert hero["kanban"]["subtitle"] == "Overbilled by $195.00 (Liftgate + Detention)"
 
 
 def test_api_case_detail():
     response = client.get("/api/cases/INV-FRT-2026-09")
     assert response.status_code == 200
     detail = response.json()
+    assert detail["expected_cents"] == 92500
+    assert detail["dispute_cents"] == 19500
     assert detail["dwell_minutes"] == 93
     assert detail["billable_detention_minutes"] == 63
     assert detail["completed_detention_hours"] == 1
+    assert detail["arrived_at"] == "14:12:00"
+    assert detail["departed_at"] == "15:45:00"
+    assert detail["allowed_dwell_minutes"] == 30
+    assert detail["destination_has_dock"] is True
     assert len(detail["lines"]) == 3
+    assert detail["erp_proposal"] is None
 
 
 def test_api_decide_shortpay():
@@ -50,6 +59,10 @@ def test_api_decide_shortpay():
     assert res["erp_proposal"]["authorized_amount_cents"] == 92500
     assert res["dispute_packet"]["disputed_total_cents"] == 19500
     assert "dock_receipt_SHP-88220.pdf" in res["dispute_packet"]["attached_evidence"]
+    stored = client.get("/api/cases/INV-FRT-2026-09")
+    assert stored.status_code == 200
+    assert stored.json()["erp_proposal"]["authorized_amount_cents"] == 92500
+    assert stored.json()["dispute_packet"]["disputed_total_cents"] == 19500
 
 
 def test_api_surfaces_ocean_skip_reason():
