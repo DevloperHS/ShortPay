@@ -1,0 +1,35 @@
+# Environment and API Secrets
+backend/.env
+*.env
+*.env.local
+*.env.*.local
+
+# Python Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python Bytecode and Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Antigravity / Agent CLI Scratch & Logs
+.agents/
+.gemini/
+scratch/
+*.log
+
+# IDE & Editor Settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS Artifacts
+.DS_Store
+Thumbs.db
