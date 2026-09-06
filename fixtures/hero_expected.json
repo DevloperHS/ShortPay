@@ -1,0 +1,22 @@
+{
+  "shipment_id": "SHP-88220",
+  "invoice_id": "INV-FRT-2026-09",
+  "dwell_minutes": 93,
+  "billable_detention_minutes": 63,
+  "completed_detention_hours": 1,
+  "billed_cents": 112000,
+  "expected_cents": 92500,
+  "dispute_cents": 19500,
+  "lines": [
+    {"charge_type": "BASE_FREIGHT", "billed_cents": 85000, "expected_cents": 85000},
+    {"charge_type": "DETENTION", "billed_cents": 17500, "expected_cents": 7500},
+    {"charge_type": "LIFTGATE", "billed_cents": 9500, "expected_cents": 0}
+  ],
+  "disposition": "NeedsReview",
+  "kanban": {
+    "column": "Major exceptions",
+    "color": "#FCE8E6",
+    "title": "FedEx Freight - SHP-88220",
+    "subtitle": "Overbilled by $195.00 (Liftgate + Detention)"
+  }
+}
