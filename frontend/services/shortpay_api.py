@@ -8,17 +8,24 @@ class ShortpayAPIError(RuntimeError):
 
 
 class ShortpayAPI:
-    def __init__(self, base_url: str, timeout: float = 15, session=None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout: float = 15,
+        ingest_timeout: float = 90,
+        session=None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.ingest_timeout = ingest_timeout
         self.session = session or requests.Session()
 
-    def _request(self, method: str, path: str, **kwargs) -> Any:
+    def _request(self, method: str, path: str, *, timeout: float | None = None, **kwargs) -> Any:
         try:
             response = self.session.request(
                 method,
                 f"{self.base_url}{path}",
-                timeout=self.timeout,
+                timeout=self.timeout if timeout is None else timeout,
                 **kwargs,
             )
             response.raise_for_status()
@@ -48,6 +55,26 @@ class ShortpayAPI:
             "POST",
             "/api/ingest/invoice",
             json={"raw_invoice_text": invoice_text, "auto_match": True},
+            timeout=self.ingest_timeout,
+        )
+
+    def ingest_invoice_pdf(
+        self,
+        filename: str,
+        file_bytes: bytes,
+        content_type: str | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/api/ingest/invoice-pdf",
+            files={
+                "invoice_pdf": (
+                    filename,
+                    file_bytes,
+                    content_type or "application/pdf",
+                )
+            },
+            timeout=self.ingest_timeout,
         )
 
     def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
