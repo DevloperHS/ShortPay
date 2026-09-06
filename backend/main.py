@@ -29,21 +29,28 @@ def auto_ingest_fixtures():
 
     if os.path.exists(csv_path):
         contracts = parse_baseline_csv(csv_path)
-        office.ingest(contracts, source="fixture:freight_audit_baseline.csv")
+        office.ingest(
+            contracts,
+            source="fixture:freight_audit_baseline.csv",
+            emit_trace=False,
+        )
 
     if os.path.exists(dock_path):
         dock = parse_dock_log_json(dock_path)
-        office.ingest([dock], source="fixture:dock_log")
+        office.ingest([dock], source="fixture:dock_log", emit_trace=False)
 
     if os.path.exists(facility_path):
         facility = parse_facility_json(facility_path)
-        office.ingest([facility], source="fixture:facility_master")
+        office.ingest([facility], source="fixture:facility_master", emit_trace=False)
 
     if os.path.exists(invoice_path):
         invoice = parse_invoice_json(invoice_path)
-        office.ingest([invoice], source="fixture:invoice_json")
+        office.ingest([invoice], source="fixture:invoice_json", emit_trace=False)
         # Auto-match hero case
-        office.match(CaseKey(invoice_id=invoice.invoice_id, shipment_id=invoice.shipment_id))
+        office.match(
+            CaseKey(invoice_id=invoice.invoice_id, shipment_id=invoice.shipment_id),
+            emit_trace=False,
+        )
 
 
 @asynccontextmanager
@@ -94,44 +101,58 @@ def trigger_ingest():
 @app.post("/api/ingest/invoice")
 def ingest_invoice_through_sponsors(req: SponsorInvoiceIngestRequest) -> Dict[str, Any]:
     """Extract a real invoice through TensorMux/Groq, then run deterministic matching."""
-    try:
-        outcome = extract_invoice_with_fallback_details(req.raw_invoice_text)
-        office.ingest(
-            [outcome.fact],
-            source=f"{outcome.provider}:{outcome.model_name}",
-        )
+    with tracer.workflow(
+        "match_evidence",
+        trace_id="trace-freight-invoice-ingest",
+        input_value={
+            "invoice_text": req.raw_invoice_text,
+            "auto_match": req.auto_match,
+        },
+    ) as workflow:
+        try:
+            outcome = extract_invoice_with_fallback_details(req.raw_invoice_text)
+            office.ingest(
+                [outcome.fact],
+                source=f"{outcome.provider}:{outcome.model_name}",
+            )
 
-        response: Dict[str, Any] = {
-            "status": "success",
-            "provider": outcome.provider,
-            "model": outcome.model_name,
-            "invoice_id": outcome.fact.invoice_id,
-            "shipment_id": outcome.fact.shipment_id,
-            "billed_cents": outcome.fact.total_billed_cents,
-        }
+            response: Dict[str, Any] = {
+                "status": "success",
+                "provider": outcome.provider,
+                "model": outcome.model_name,
+                "invoice_id": outcome.fact.invoice_id,
+                "shipment_id": outcome.fact.shipment_id,
+                "billed_cents": outcome.fact.total_billed_cents,
+            }
+            workflow.set_attribute(
+                "shortpay.trace_id",
+                f"trace-freight-{outcome.fact.shipment_id.lower()}",
+            )
 
-        if req.auto_match:
-            case = office.match(
-                CaseKey(
-                    invoice_id=outcome.fact.invoice_id,
-                    shipment_id=outcome.fact.shipment_id,
+            if req.auto_match:
+                case = office.match(
+                    CaseKey(
+                        invoice_id=outcome.fact.invoice_id,
+                        shipment_id=outcome.fact.shipment_id,
+                    ),
+                    emit_trace=False,
                 )
-            )
-            response.update(
-                {
-                    "expected_cents": case.match_result.expected_total_cents,
-                    "dispute_cents": case.match_result.dispute_total_cents,
-                    "disposition": case.disposition.disposition_type,
-                }
-            )
-        return response
-    except ExtractionError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invoice extracted, but matching evidence is incomplete: {exc}",
-        ) from exc
+                response.update(
+                    {
+                        "expected_cents": case.match_result.expected_total_cents,
+                        "dispute_cents": case.match_result.dispute_total_cents,
+                        "disposition": case.disposition.disposition_type,
+                    }
+                )
+            workflow.set_output(response)
+            return response
+        except ExtractionError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invoice extracted, but matching evidence is incomplete: {exc}",
+            ) from exc
 
 
 @app.get("/api/cases")
@@ -230,13 +251,28 @@ def decide_action(req: DecideRequest):
     else:
         raise HTTPException(status_code=400, detail="Invalid action_type")
 
-    try:
-        updated_case = office.decide(key, act)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    with tracer.workflow(
+        "controller_decision",
+        trace_id=f"trace-freight-{req.shipment_id.lower()}",
+        input_value={
+            "invoice_id": req.invoice_id,
+            "shipment_id": req.shipment_id,
+            "action_type": req.action_type,
+            "expected_payable_cents": req.expected_payable_cents,
+            "override_reason": req.override_reason,
+        },
+    ) as workflow:
+        try:
+            updated_case = office.decide(key, act)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-    return {
-        "status": "success",
-        "new_disposition": updated_case.disposition.disposition_type,
-        "approved_payable_cents": getattr(updated_case.disposition, "approved_payable_cents", None),
-    }
+        response = {
+            "status": "success",
+            "new_disposition": updated_case.disposition.disposition_type,
+            "approved_payable_cents": getattr(
+                updated_case.disposition, "approved_payable_cents", None
+            ),
+        }
+        workflow.set_output(response)
+        return response

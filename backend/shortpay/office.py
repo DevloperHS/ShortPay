@@ -34,6 +34,7 @@ class AuditOffice:
         facts: List[Union[InvoiceFact, ContractFact, FacilityFact, DockDwellFact]],
         *,
         source: str = "application",
+        emit_trace: bool = True,
     ):
         for fact in facts:
             if isinstance(fact, InvoiceFact):
@@ -51,15 +52,16 @@ class AuditOffice:
             else:
                 raise TypeError(f"Unsupported fact type: {type(fact).__name__}")
 
-            shipment_id = getattr(fact, "shipment_id")
-            tracer.trace_ingest(
-                trace_id=f"trace-freight-{shipment_id.lower()}",
-                fact_type=type(fact).__name__,
-                record_id=record_id,
-                source=source,
-            )
+            if emit_trace:
+                shipment_id = getattr(fact, "shipment_id")
+                tracer.trace_ingest(
+                    trace_id=f"trace-freight-{shipment_id.lower()}",
+                    fact_type=type(fact).__name__,
+                    record_id=record_id,
+                    source=source,
+                )
 
-    def match(self, case_key: CaseKey) -> AuditCase:
+    def match(self, case_key: CaseKey, *, emit_trace: bool = True) -> AuditCase:
         invoice = self.store.invoices.get(case_key.invoice_id)
         if not invoice:
             raise KeyError(f"Invoice {case_key.invoice_id} not found in store")
@@ -115,15 +117,16 @@ class AuditOffice:
             for bl, el in match_res.lines
             if bl.amount_cents > el.amount_cents
         ]
-        tracer.trace_match(
-            trace_id=trace_id,
-            invoice_id=case_key.invoice_id,
-            shipment_id=case_key.shipment_id,
-            expected_total_cents=match_res.expected_total_cents,
-            dispute_total_cents=match_res.dispute_total_cents,
-            rules_fired=rules_fired,
-            evidence_hash=ev_hash,
-        )
+        if emit_trace:
+            tracer.trace_match(
+                trace_id=trace_id,
+                invoice_id=case_key.invoice_id,
+                shipment_id=case_key.shipment_id,
+                expected_total_cents=match_res.expected_total_cents,
+                dispute_total_cents=match_res.dispute_total_cents,
+                rules_fired=rules_fired,
+                evidence_hash=ev_hash,
+            )
         return case
 
 

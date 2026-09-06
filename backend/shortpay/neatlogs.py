@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,21 @@ def _neatlogs_base_url(configured_endpoint: str | None) -> str:
     if endpoint.endswith("/v1/traces"):
         endpoint = endpoint[: -len("/v1/traces")]
     return endpoint
+
+
+class WorkflowTrace:
+    """Small facade for adding dashboard-friendly fields to a workflow root."""
+
+    def __init__(self, span=None):
+        self._span = span
+
+    def set_output(self, value: Any) -> None:
+        if self._span is not None:
+            self._span.set_attribute("output.value", json.dumps(value, sort_keys=True))
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        if self._span is not None:
+            self._span.set_attribute(key, NeatlogsTracer._attribute_value(value))
 
 
 class NeatlogsTracer:
@@ -101,15 +117,89 @@ class NeatlogsTracer:
             return
 
         try:
-            with neatlogs.trace(span_name, kind="CHAIN") as span:
+            kind = "WORKFLOW" if span_name == "match_evidence" else "CHAIN"
+            with neatlogs.trace(span_name, kind=kind) as span:
                 span.set_attribute("shortpay.trace_id", trace_id)
                 for key, value in payload.items():
                     span.set_attribute(
                         f"shortpay.{key}", self._attribute_value(value)
                     )
+                input_value, output_value = self._dashboard_values(span_name, payload)
+                span.set_attribute("input.value", json.dumps(input_value, sort_keys=True))
+                span.set_attribute("output.value", json.dumps(output_value, sort_keys=True))
         except Exception:
             # Observability must never stop invoice auditing, but failures remain visible.
             logger.exception("Neatlogs span export failed for %s", span_name)
+
+    @staticmethod
+    def _dashboard_values(
+        span_name: str, payload: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if span_name == "extract_billed":
+            return (
+                {
+                    "invoice_id": payload["invoice_id"],
+                    "provider": payload["provider"],
+                    "model": payload["model"],
+                },
+                {
+                    "billed_cents": payload["billed_total_cents"],
+                    "lines_count": payload["lines_count"],
+                },
+            )
+        if span_name == "ingest_fact":
+            return (
+                {
+                    "fact_type": payload["fact_type"],
+                    "record_id": payload["record_id"],
+                    "source": payload["source"],
+                },
+                {"status": "ingested"},
+            )
+        if span_name == "match_evidence":
+            return (
+                {
+                    "invoice_id": payload["invoice_id"],
+                    "shipment_id": payload["shipment_id"],
+                    "rules_fired": payload["rules_fired"],
+                },
+                {
+                    "expected_cents": payload["expected_total_cents"],
+                    "dispute_cents": payload["dispute_total_cents"],
+                },
+            )
+        return (
+            {
+                "invoice_id": payload["invoice_id"],
+                "shipment_id": payload["shipment_id"],
+                "action": payload["action_type"],
+            },
+            {
+                "disposition": payload["disposition_type"],
+                "payable_cents": payload["payable_cents"],
+            },
+        )
+
+    @contextmanager
+    def workflow(
+        self,
+        name: str,
+        *,
+        trace_id: str,
+        input_value: dict[str, Any],
+    ):
+        """Create one root row and nest all Shortpay operation spans beneath it."""
+        if not self._ensure_sdk_init():
+            yield WorkflowTrace()
+            return
+
+        try:
+            with neatlogs.trace(name, kind="WORKFLOW") as span:
+                span.set_attribute("shortpay.trace_id", trace_id)
+                span.set_attribute("input.value", json.dumps(input_value, sort_keys=True))
+                yield WorkflowTrace(span)
+        finally:
+            self.flush()
 
     def flush(self) -> None:
         if self._sdk_initialized:
