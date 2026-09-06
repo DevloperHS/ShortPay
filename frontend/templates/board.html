@@ -127,8 +127,9 @@
       const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       const easeOut = 'cubic-bezier(0.23, 1, 0.32, 1)';
       const animate = (element, keyframes, duration) => {
-        if (!element || typeof element.animate !== 'function') return Promise.resolve();
-        return element.animate(keyframes, { duration, easing: easeOut, fill: 'both' }).finished.catch(() => {});
+        if (!element || window.matchMedia('(prefers-reduced-motion: reduce)').matches || typeof element.animate !== 'function') return Promise.resolve();
+        const animation = element.animate(keyframes, { duration, easing: easeOut, fill: 'both' });
+        return animation.finished.catch(() => {}).finally(() => animation.cancel());
       };
 
       tabs.forEach((tab) => tab.addEventListener('click', async () => {

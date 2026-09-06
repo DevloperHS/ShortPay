@@ -81,6 +81,19 @@ def test_board_renders_prd_columns_and_case(frontend_client):
     assert b"data-theme-toggle" in response.data
 
 
+@pytest.mark.parametrize("path", ["/", "/cases/INV-FRT-2026-09"])
+def test_shared_theme_markup(frontend_client, path):
+    client, _ = frontend_client
+    html = client.get(path).get_data(as_text=True)
+    assert 'data-theme="light"' in html
+    assert 'aria-pressed="false"' in html
+    assert 'aria-label="Switch to dark color theme"' in html
+    assert html.index("localStorage.getItem('shortpay-theme')") < html.index('rel="stylesheet"')
+    assert "localStorage.setItem('shortpay-theme', theme)" in html
+    assert "window.Motion" not in html
+    assert '<script src=' not in html
+
+
 def test_case_detail_renders_locked_math(frontend_client):
     client, _ = frontend_client
     response = client.get("/cases/INV-FRT-2026-09")
