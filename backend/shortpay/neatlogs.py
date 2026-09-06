@@ -1,91 +1,138 @@
-import os
-import json
 import hashlib
+import json
+import logging
+import os
 import time
-import requests
-from typing import Dict, Any, List, Optional
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
+
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+logger = logging.getLogger(__name__)
 
 try:
     import neatlogs
+
     SDK_AVAILABLE = True
 except ImportError:
     SDK_AVAILABLE = False
 
 
-def compute_evidence_hash(facts_dict: Dict[str, Any]) -> str:
-    """Computes SHA-256 content hash of evidence pack facts for Neatlogs auditability."""
-    serialized = json.dumps(facts_dict, sort_keys=True)
+def compute_evidence_hash(facts_dict: dict[str, Any]) -> str:
+    """Return a stable, compact content hash for the matched evidence pack."""
+    serialized = json.dumps(facts_dict, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
 
 
+def _neatlogs_base_url(configured_endpoint: str | None) -> str:
+    endpoint = (configured_endpoint or "https://ingest.neatlogs.com").rstrip("/")
+    if endpoint.endswith("/v1/traces"):
+        endpoint = endpoint[: -len("/v1/traces")]
+    return endpoint
+
+
 class NeatlogsTracer:
-    """
-    Observability adapter for Neatlogs (Track 2 sponsor integration).
-    Supports both official neatlogs SDK (OpenTelemetry/OpenInference) and HTTP endpoint fallback.
-    """
+    """Thin, failure-isolated adapter around the official Neatlogs Python SDK."""
 
-    def __init__(self, api_key: Optional[str] = None, workflow_name: str = "shortpay-freight-audit"):
-        self.api_key = api_key or os.environ.get("NEATLOGS_API_KEY")
+    def __init__(
+        self,
+        api_key: str | None = None,
+        workflow_name: str = "shortpay-freight-audit",
+    ):
+        self.api_key = api_key or os.getenv("NEATLOGS_API_KEY")
         self.workflow_name = workflow_name
-        self.endpoint = os.environ.get("NEATLOGS_ENDPOINT", "https://api.neatlogs.com/v1/traces")
+        self.endpoint = _neatlogs_base_url(os.getenv("NEATLOGS_ENDPOINT"))
+        self.enabled = os.getenv("NEATLOGS_ENABLED", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+        }
         self._sdk_initialized = False
-
-        if self.api_key and SDK_AVAILABLE:
-            try:
-                neatlogs.init(
-                    api_key=self.api_key,
-                    workflow_name=self.workflow_name,
-                )
-                self._sdk_initialized = True
-                print(f"[NEATLOGS SDK] Initialized successfully for workflow '{self.workflow_name}'")
-            except Exception as e:
-                print(f"[NEATLOGS WARNING] SDK init failed: {e}")
-
-    def _ensure_sdk_init(self):
-        if not self._sdk_initialized and SDK_AVAILABLE:
-            self.api_key = self.api_key or os.environ.get("NEATLOGS_API_KEY")
-            if self.api_key and self.api_key.strip():
-                try:
-                    neatlogs.init(
-                        api_key=self.api_key,
-                        workflow_name=self.workflow_name,
-                    )
-                    self._sdk_initialized = True
-                    print(f"[NEATLOGS SDK] Initialized successfully for workflow '{self.workflow_name}'")
-                except Exception as e:
-                    print(f"[NEATLOGS WARNING] SDK init failed: {e}")
-
-    def _emit(self, trace_id: str, span_name: str, payload: Dict[str, Any]):
         self._ensure_sdk_init()
-        timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(
+            self.enabled and self.api_key and self.api_key.strip() and SDK_AVAILABLE
+        )
+
+    def _ensure_sdk_init(self) -> bool:
+        if self._sdk_initialized:
+            return True
+
+        self.api_key = self.api_key or os.getenv("NEATLOGS_API_KEY")
+        if not self.enabled or not self.api_key or not self.api_key.strip() or not SDK_AVAILABLE:
+            return False
+
+        try:
+            neatlogs.init(
+                api_key=self.api_key,
+                endpoint=self.endpoint,
+                workflow_name=self.workflow_name,
+                instrumentations=["pydantic_ai"],
+                capture_logs=True,
+                register_shutdown_handlers=False,
+            )
+            self._sdk_initialized = True
+        except Exception:
+            logger.exception("Neatlogs SDK initialization failed")
+        return self._sdk_initialized
+
+    @staticmethod
+    def _attribute_value(value: Any) -> str | int | float | bool:
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        return json.dumps(value, sort_keys=True)
+
+    def _emit(self, trace_id: str, span_name: str, payload: dict[str, Any]) -> None:
         event = {
             "neatlogs_version": "1.0",
             "workflow": self.workflow_name,
-            "timestamp": timestamp,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "trace_id": trace_id,
             "span_name": span_name,
             "payload": payload,
         }
-        # Print formatted log line for local terminal/uvicorn logs
-        print(f"[NEATLOGS TRACE] {json.dumps(event)}")
+        logger.info("SHORTPAY_TRACE %s", json.dumps(event, sort_keys=True))
 
-        # Use official Neatlogs SDK if initialized
+        if not self._ensure_sdk_init():
+            return
+
+        try:
+            with neatlogs.trace(span_name, kind="CHAIN") as span:
+                span.set_attribute("shortpay.trace_id", trace_id)
+                for key, value in payload.items():
+                    span.set_attribute(
+                        f"shortpay.{key}", self._attribute_value(value)
+                    )
+        except Exception:
+            # Observability must never stop invoice auditing, but failures remain visible.
+            logger.exception("Neatlogs span export failed for %s", span_name)
+
+    def flush(self) -> None:
         if self._sdk_initialized:
-            try:
-                with neatlogs.trace(name=span_name, **payload):
-                    pass
-                neatlogs.flush()
-            except Exception as err:
-                print(f"[NEATLOGS WARNING] SDK trace failed: {err}")
+            neatlogs.flush()
 
+    def shutdown(self) -> None:
+        if self._sdk_initialized:
+            neatlogs.flush()
+            neatlogs.shutdown()
 
-        # Post via HTTP if NEATLOGS_API_KEY is configured
-        if self.api_key:
-            try:
-                headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-                requests.post(self.endpoint, json=event, headers=headers, timeout=2.0)
-            except Exception as err:
-                pass
+    def trace_ingest(
+        self,
+        *,
+        trace_id: str,
+        fact_type: str,
+        record_id: str,
+        source: str,
+    ) -> None:
+        self._emit(
+            trace_id,
+            "ingest_fact",
+            {"fact_type": fact_type, "record_id": record_id, "source": source},
+        )
 
     def trace_extraction(
         self,
@@ -95,11 +142,11 @@ class NeatlogsTracer:
         lines_count: int,
         billed_total_cents: int,
         model_name: str,
-    ):
+    ) -> None:
         self._emit(
-            trace_id=trace_id,
-            span_name="extract_billed",
-            payload={
+            trace_id,
+            "extract_billed",
+            {
                 "invoice_id": invoice_id,
                 "provider": provider,
                 "model": model_name,
@@ -115,13 +162,13 @@ class NeatlogsTracer:
         shipment_id: str,
         expected_total_cents: int,
         dispute_total_cents: int,
-        rules_fired: List[str],
+        rules_fired: list[str],
         evidence_hash: str,
-    ):
+    ) -> None:
         self._emit(
-            trace_id=trace_id,
-            span_name="match_evidence",
-            payload={
+            trace_id,
+            "match_evidence",
+            {
                 "invoice_id": invoice_id,
                 "shipment_id": shipment_id,
                 "expected_total_cents": expected_total_cents,
@@ -139,11 +186,11 @@ class NeatlogsTracer:
         action_type: str,
         disposition_type: str,
         payable_cents: int,
-    ):
+    ) -> None:
         self._emit(
-            trace_id=trace_id,
-            span_name="decide",
-            payload={
+            trace_id,
+            "decide",
+            {
                 "invoice_id": invoice_id,
                 "shipment_id": shipment_id,
                 "action_type": action_type,
@@ -153,5 +200,4 @@ class NeatlogsTracer:
         )
 
 
-# Global singleton instance
 tracer = NeatlogsTracer()

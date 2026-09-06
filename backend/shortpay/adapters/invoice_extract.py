@@ -1,59 +1,136 @@
-import os
 import json
-from typing import Tuple, Optional
+import logging
+import os
+import threading
+import time
+from collections import defaultdict, deque
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Literal
+
 from dotenv import load_dotenv
-from shortpay.evidence import InvoiceFact, InvoiceLine, ChargeType
+
+from shortpay.evidence import ChargeType, InvoiceFact, InvoiceLine
 from shortpay.neatlogs import tracer
 
-# Load backend/.env
-load_dotenv()
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+logger = logging.getLogger(__name__)
 
 try:
-    from pydantic_ai import Agent
-    from pydantic_ai.models.openai import OpenAIModel
+    from httpx2 import AsyncClient
+    from openai import AsyncOpenAI
+    from pydantic_ai import Agent, PromptedOutput
+    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.providers.openai import OpenAIProvider
+
     PYDANTIC_AI_AVAILABLE = True
 except ImportError:
     PYDANTIC_AI_AVAILABLE = False
 
-try:
-    from openai import OpenAI
-    OPENAI_SDK_AVAILABLE = True
-except ImportError:
-    OPENAI_SDK_AVAILABLE = False
+
+ProviderName = Literal["TensorMux", "Groq"]
 
 
-class ExtractionError(Exception):
-    """Raised when both TensorMux and Groq extraction fail."""
-    pass
+class ExtractionError(RuntimeError):
+    """Raised when no configured inference provider can extract an invoice."""
 
 
-def parse_invoice_json(filepath: str) -> InvoiceFact:
-    """
-    Local JSON Fixture Parser (Used by backend ingest).
-    Parses JSON fixture into domain InvoiceFact with integer cents.
-    """
-    with open(filepath, mode="r", encoding="utf-8") as f:
-        data = json.load(f)
+class SponsorRequestLimitError(ExtractionError):
+    """Raised before a sponsor request would exceed the rolling rate limit."""
+
+
+@dataclass(frozen=True)
+class ExtractionOutcome:
+    fact: InvoiceFact
+    provider: ProviderName
+    model_name: str
+
+
+EXTRACTION_INSTRUCTIONS = """
+You extract billed facts from a carrier freight invoice.
+
+Return only facts present in the supplied invoice. Monetary values must be integer
+cents. Map base transportation to BASE_FREIGHT, detention or driver waiting time
+to DETENTION, and liftgate service to LIFTGATE. Use OTHER for an unknown charge.
+Do not calculate an authorized payable, dispute amount, or policy decision.
+The invoice identifier belongs in invoice_id and line items belong in lines.
+""".strip()
+
+
+class ProviderRequestLimiter:
+    """Thread-safe rolling-window limiter applied to actual outbound HTTP attempts."""
+
+    def __init__(
+        self,
+        max_requests: int = 60,
+        window_seconds: float = 60.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if max_requests < 1 or max_requests > 60:
+            raise ValueError("max_requests must be between 1 and 60")
+        if window_seconds <= 0:
+            raise ValueError("window_seconds must be positive")
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._clock = clock
+        self._requests: dict[ProviderName, deque[float]] = defaultdict(deque)
+        self._lock = threading.Lock()
+
+    def acquire(self, provider: ProviderName) -> None:
+        now = self._clock()
+        with self._lock:
+            requests = self._requests[provider]
+            cutoff = now - self.window_seconds
+            while requests and requests[0] <= cutoff:
+                requests.popleft()
+
+            if len(requests) >= self.max_requests:
+                raise SponsorRequestLimitError(
+                    f"{provider} request blocked: maximum {self.max_requests} "
+                    f"requests per {self.window_seconds:g} seconds reached"
+                )
+            requests.append(now)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._requests.clear()
+
+
+provider_request_limiter = ProviderRequestLimiter()
+
+
+def _request_limit_hook(provider: ProviderName):
+    async def enforce_request_limit(_request) -> None:
+        provider_request_limiter.acquire(provider)
+
+    return enforce_request_limit
+
+
+def parse_invoice_json(filepath: str | Path) -> InvoiceFact:
+    """Parse a deterministic local fixture into the public invoice domain type."""
+    with Path(filepath).open(mode="r", encoding="utf-8") as invoice_file:
+        data = json.load(invoice_file)
 
     lines: list[InvoiceLine] = []
-    for raw in data.get("line_items", []):
-        ctype_str = raw["charge_type"].upper()
+    for raw in data.get("line_items", data.get("lines", [])):
+        charge_name = str(raw["charge_type"]).upper()
         try:
-            ctype_enum = ChargeType[ctype_str]
+            charge_type = ChargeType[charge_name]
         except KeyError:
-            ctype_enum = ChargeType.OTHER
+            charge_type = ChargeType.OTHER
 
         lines.append(
             InvoiceLine(
-                charge_type=ctype_enum,
-                amount_cents=raw["amount_cents"],
+                charge_type=charge_type,
+                amount_cents=int(raw["amount_cents"]),
                 billed_minutes=raw.get("billed_minutes"),
                 description=raw.get("description"),
             )
         )
 
     return InvoiceFact(
-        invoice_id=data["invoice_number"],
+        invoice_id=data.get("invoice_id", data.get("invoice_number")),
         shipment_id=data["shipment_id"],
         carrier_name=data["carrier_name"],
         bill_of_lading=data["bill_of_lading"],
@@ -61,136 +138,106 @@ def parse_invoice_json(filepath: str) -> InvoiceFact:
     )
 
 
-def _call_openai_compatible_json(
+def _call_openai_compatible(
+    *,
+    provider_name: ProviderName,
     base_url: str,
     api_key: str,
     model_name: str,
-    prompt: str,
+    invoice_text: str,
 ) -> InvoiceFact:
-    """
-    Calls OpenAI-compatible endpoint (TensorMux or Groq) using Pydantic AI or OpenAI SDK.
-    """
-    system_prompt = (
-        "Extract carrier invoice data into valid JSON matching this structure:\n"
-        "{\n"
-        '  "invoice_number": "INV-FRT-2026-09",\n'
-        '  "shipment_id": "SHP-88220",\n'
-        '  "carrier_name": "FedEx Freight",\n'
-        '  "bill_of_lading": "BOL-US-99121",\n'
-        '  "line_items": [\n'
-        '    {"charge_type": "BASE_FREIGHT", "amount_cents": 85000, "description": "Freight"},\n'
-        '    {"charge_type": "DETENTION", "amount_cents": 17500, "billed_minutes": 60},\n'
-        '    {"charge_type": "LIFTGATE", "amount_cents": 9500}\n'
-        "  ]\n"
-        "}"
+    """Call one OpenAI-compatible sponsor endpoint through Pydantic AI."""
+    if not PYDANTIC_AI_AVAILABLE:
+        raise ExtractionError("pydantic-ai is not installed")
+
+    http_client = AsyncClient(
+        timeout=30.0,
+        event_hooks={"request": [_request_limit_hook(provider_name)]},
+    )
+    openai_client = AsyncOpenAI(
+        base_url=base_url.rstrip("/"),
+        api_key=api_key,
+        http_client=http_client,
+    )
+    model = OpenAIChatModel(
+        model_name,
+        provider=OpenAIProvider(openai_client=openai_client),
+    )
+    agent = Agent(
+        model,
+        instructions=EXTRACTION_INSTRUCTIONS,
+        output_type=PromptedOutput(InvoiceFact),
+        model_settings={"max_tokens": 768, "temperature": 0.0},
+        retries=2,
+    )
+    result = agent.run_sync(invoice_text)
+    return result.output
+
+
+def extract_invoice_with_fallback_details(
+    raw_text_or_json: str,
+    tensormux_model: str | None = None,
+    groq_model: str | None = None,
+) -> ExtractionOutcome:
+    """Extract with TensorMux first, then use Groq only if the primary fails."""
+    if not raw_text_or_json.strip():
+        raise ExtractionError("Invoice text cannot be empty")
+
+    provider_configs: tuple[tuple[ProviderName, str | None, str, str], ...] = (
+        (
+            "TensorMux",
+            os.getenv("TENSORMUX_API_KEY"),
+            os.getenv("TENSORMUX_BASE_URL", "https://api.tensormux.com/v1"),
+            tensormux_model or os.getenv("TENSORMUX_MODEL", "glm-4-7-flash"),
+        ),
+        (
+            "Groq",
+            os.getenv("GROQ_API_KEY"),
+            os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
+            groq_model or os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b"),
+        ),
     )
 
-    if PYDANTIC_AI_AVAILABLE:
-        tm_model = OpenAIModel(model_name, base_url=base_url, api_key=api_key)
-        tm_agent = Agent(tm_model, output_type=InvoiceFact)
-        res = tm_agent.run_sync(prompt)
-        if res and res.data:
-            return res.data
+    failures: list[str] = []
+    for provider, api_key, base_url, model_name in provider_configs:
+        if not api_key or not api_key.strip():
+            failures.append(f"{provider}: API key missing")
+            continue
 
-    if OPENAI_SDK_AVAILABLE:
-        client = OpenAI(base_url=base_url, api_key=api_key)
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.0,
-        )
-        content = response.choices[0].message.content
-        data = json.loads(content)
-
-        lines = []
-        for raw in data.get("line_items", []):
-            ctype_str = str(raw["charge_type"]).upper()
-            try:
-                ctype_enum = ChargeType[ctype_str]
-            except KeyError:
-                ctype_enum = ChargeType.OTHER
-            lines.append(
-                InvoiceLine(
-                    charge_type=ctype_enum,
-                    amount_cents=int(raw["amount_cents"]),
-                    billed_minutes=raw.get("billed_minutes"),
-                    description=raw.get("description"),
-                )
+        try:
+            fact = _call_openai_compatible(
+                provider_name=provider,
+                base_url=base_url,
+                api_key=api_key,
+                model_name=model_name,
+                invoice_text=raw_text_or_json,
             )
+        except Exception as exc:
+            failures.append(f"{provider}: {type(exc).__name__}: {exc}")
+            logger.warning("%s invoice extraction failed; trying fallback", provider)
+            continue
 
-        return InvoiceFact(
-            invoice_id=data.get("invoice_number", data.get("invoice_id", "INV-UNKNOWN")),
-            shipment_id=data.get("shipment_id", "SHP-UNKNOWN"),
-            carrier_name=data.get("carrier_name", "UNKNOWN"),
-            bill_of_lading=data.get("bill_of_lading", "BOL-UNKNOWN"),
-            lines=tuple(lines),
+        tracer.trace_extraction(
+            trace_id=f"trace-freight-{fact.shipment_id.lower()}",
+            invoice_id=fact.invoice_id,
+            provider=provider,
+            lines_count=len(fact.lines),
+            billed_total_cents=fact.total_billed_cents,
+            model_name=model_name,
         )
+        return ExtractionOutcome(fact=fact, provider=provider, model_name=model_name)
 
-    raise ExtractionError("Neither pydantic_ai nor openai package is available")
+    raise ExtractionError("Invoice extraction failed. " + " | ".join(failures))
 
 
 def extract_invoice_with_fallback(
     raw_text_or_json: str,
-    tensormux_model: str = "glm-4-7-flash",
-    groq_model: str = "qwen/qwen3.6-27b",
+    tensormux_model: str | None = None,
+    groq_model: str | None = None,
 ) -> InvoiceFact:
-    """
-    2-Tier Resilient Invoice Extractor:
-    1. Try Primary: TensorMux Inference Gateway ('glm-4-7-flash')
-    2. Try Fallback: Groq Free Tier API ('qwen/qwen3.6-27b')
-    3. If both fail -> Raise ExtractionError
-    """
-    # Tier 1: TensorMux
-    tensormux_key = os.getenv("TENSORMUX_API_KEY")
-    tensormux_base_url = os.getenv("TENSORMUX_BASE_URL", "https://api.tensormux.com/v1")
-
-    if tensormux_key and tensormux_key.strip():
-        try:
-            fact = _call_openai_compatible_json(
-                base_url=tensormux_base_url,
-                api_key=tensormux_key,
-                model_name=tensormux_model,
-                prompt=raw_text_or_json,
-            )
-            tracer.trace_extraction(
-                trace_id=f"trace-freight-{fact.shipment_id.lower()}",
-                invoice_id=fact.invoice_id,
-                provider="TensorMux",
-                lines_count=len(fact.lines),
-                billed_total_cents=fact.billed_total_cents,
-                model_name=tensormux_model,
-            )
-            return fact
-        except Exception as e:
-            print(f"[TensorMux Warning] Extraction failed: {e}. Trying Groq fallback...")
-
-    # Tier 2: Groq Fallback
-    groq_key = os.getenv("GROQ_API_KEY")
-    groq_base_url = "https://api.groq.com/openai/v1"
-
-    if groq_key and groq_key.strip():
-        try:
-            fact = _call_openai_compatible_json(
-                base_url=groq_base_url,
-                api_key=groq_key,
-                model_name=groq_model,
-                prompt=raw_text_or_json,
-            )
-            tracer.trace_extraction(
-                trace_id=f"trace-freight-{fact.shipment_id.lower()}",
-                invoice_id=fact.invoice_id,
-                provider="Groq",
-                lines_count=len(fact.lines),
-                billed_total_cents=fact.billed_total_cents,
-                model_name=groq_model,
-            )
-            return fact
-        except Exception as e:
-            print(f"[Groq Warning] Extraction failed: {e}.")
-
-    raise ExtractionError("Both TensorMux and Groq extraction failed or API keys were missing.")
-
+    """Backward-compatible API returning only the validated invoice fact."""
+    return extract_invoice_with_fallback_details(
+        raw_text_or_json,
+        tensormux_model=tensormux_model,
+        groq_model=groq_model,
+    ).fact

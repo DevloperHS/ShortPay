@@ -15,9 +15,10 @@ Shortpay is the AP desk that audits carrier accessorials **before the money leav
 
 1. **Integer-Cent Monetary Standard**: Zero floating-point math on financial paths (`$925.00` = `92500` cents). Zero rounding errors.
 2. **Pure Math Engine**: Financial math has **zero LLM dependency**. The matcher function `match_evidence()` is a pure function.
-3. **2-Tier Resilient LLM Extraction**: Invoice PDFs/text are parsed using **TensorMux** (`glm-4-7-flash`) primary, with automatic fallback to **Groq** (`qwen/qwen3.6-27b`).
+3. **2-Tier Resilient LLM Extraction**: Invoice text is parsed using **TensorMux** (`glm-4-7-flash`) primary, with automatic fallback to **Groq** (`qwen/qwen3.8-27b`).
 4. **Neatlogs Observability**: Every extraction, match calculation, and human decision emits audit-compliant log spans and SHA-256 evidence hashes (`trace-freight-shp-88220`) to the **Neatlogs** dashboard.
 5. **Maximor Autonomy Loop**: Auto-closes overbills $\le \$50.00$ (`SHORT-PAY-01`) only after a human has approved those specific rules on the lane.
+6. **Sponsor Request Guardrail**: TensorMux and Groq are each limited to 60 outbound HTTP attempts per rolling 60-second window, including retries and concurrent calls.
 
 ---
 
@@ -65,10 +66,12 @@ TENSORMUX_BASE_URL=https://api.tensormux.com/v1
 
 # Groq Secondary Fallback LLM Gateway (Free Tier)
 GROQ_API_KEY=your_groq_api_key_here
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+GROQ_MODEL=qwen/qwen3.8-27b
 
 # Neatlogs Observability Tracing Gateway
 NEATLOGS_API_KEY=your_neatlogs_api_key_here
-NEATLOGS_ENDPOINT=https://api.neatlogs.com/v1/traces
+NEATLOGS_ENDPOINT=https://ingest.neatlogs.com
 ```
 
 ---
@@ -86,7 +89,11 @@ $env:PYTHONPATH="backend"; pytest backend/tests
 PYTHONPATH=backend pytest backend/tests
 ```
 
-*Expected Result: `5 passed in 1.45s`*
+Live sponsor verification is opt-in and calls the configured external endpoints:
+
+```bash
+$env:PYTHONPATH="backend"; pytest --live-sponsors backend/tests
+```
 
 ---
 
@@ -108,6 +115,7 @@ The server will automatically auto-ingest baseline fixtures on startup and serve
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `POST` | `/api/ingest` | Triggers auto-ingestion of baseline CSVs, facility masters, dock logs, and carrier invoices. |
+| `POST` | `/api/ingest/invoice` | Extracts invoice text through TensorMux with Groq fallback, then optionally matches it. |
 | `GET` | `/api/cases` | Returns all Kanban cases categorized into columns (`Major exceptions`, `Auto-closed`, `Short-paid`, `Paid as billed`, `Out of scope`). |
 | `GET` | `/api/cases/{invoice_id}` | Retrieves detailed math grid facts, line item variances, and current disposition for a single case. |
 | `POST` | `/api/decide` | Submits human controller action (`ApproveShortPay` or `OverridePayAsBilled`). Proposes ERP posting & dispute notice. |

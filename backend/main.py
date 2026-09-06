@@ -3,13 +3,18 @@ from typing import List, Dict, Any
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from shortpay import AuditOffice, CaseKey, ApproveShortPay, OverridePayAsBilled
 from shortpay.adapters.baseline_csv import parse_baseline_csv
 from shortpay.adapters.dock_log import parse_dock_log_json
 from shortpay.adapters.facility_master import parse_facility_json
-from shortpay.adapters.invoice_extract import parse_invoice_json
+from shortpay.adapters.invoice_extract import (
+    ExtractionError,
+    extract_invoice_with_fallback_details,
+    parse_invoice_json,
+)
+from shortpay.neatlogs import tracer
 
 office = AuditOffice.in_memory()
 
@@ -24,19 +29,19 @@ def auto_ingest_fixtures():
 
     if os.path.exists(csv_path):
         contracts = parse_baseline_csv(csv_path)
-        office.ingest(contracts)
+        office.ingest(contracts, source="fixture:freight_audit_baseline.csv")
 
     if os.path.exists(dock_path):
         dock = parse_dock_log_json(dock_path)
-        office.ingest([dock])
+        office.ingest([dock], source="fixture:dock_log")
 
     if os.path.exists(facility_path):
         facility = parse_facility_json(facility_path)
-        office.ingest([facility])
+        office.ingest([facility], source="fixture:facility_master")
 
     if os.path.exists(invoice_path):
         invoice = parse_invoice_json(invoice_path)
-        office.ingest([invoice])
+        office.ingest([invoice], source="fixture:invoice_json")
         # Auto-match hero case
         office.match(CaseKey(invoice_id=invoice.invoice_id, shipment_id=invoice.shipment_id))
 
@@ -44,7 +49,10 @@ def auto_ingest_fixtures():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     auto_ingest_fixtures()
-    yield
+    try:
+        yield
+    finally:
+        tracer.shutdown()
 
 
 app = FastAPI(
@@ -72,10 +80,58 @@ class DecideRequest(BaseModel):
     override_reason: str = ""
 
 
+class SponsorInvoiceIngestRequest(BaseModel):
+    raw_invoice_text: str = Field(min_length=1)
+    auto_match: bool = True
+
+
 @app.post("/api/ingest")
 def trigger_ingest():
     auto_ingest_fixtures()
     return {"status": "success", "message": "Fixtures ingested successfully"}
+
+
+@app.post("/api/ingest/invoice")
+def ingest_invoice_through_sponsors(req: SponsorInvoiceIngestRequest) -> Dict[str, Any]:
+    """Extract a real invoice through TensorMux/Groq, then run deterministic matching."""
+    try:
+        outcome = extract_invoice_with_fallback_details(req.raw_invoice_text)
+        office.ingest(
+            [outcome.fact],
+            source=f"{outcome.provider}:{outcome.model_name}",
+        )
+
+        response: Dict[str, Any] = {
+            "status": "success",
+            "provider": outcome.provider,
+            "model": outcome.model_name,
+            "invoice_id": outcome.fact.invoice_id,
+            "shipment_id": outcome.fact.shipment_id,
+            "billed_cents": outcome.fact.total_billed_cents,
+        }
+
+        if req.auto_match:
+            case = office.match(
+                CaseKey(
+                    invoice_id=outcome.fact.invoice_id,
+                    shipment_id=outcome.fact.shipment_id,
+                )
+            )
+            response.update(
+                {
+                    "expected_cents": case.match_result.expected_total_cents,
+                    "dispute_cents": case.match_result.dispute_total_cents,
+                    "disposition": case.disposition.disposition_type,
+                }
+            )
+        return response
+    except ExtractionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invoice extracted, but matching evidence is incomplete: {exc}",
+        ) from exc
 
 
 @app.get("/api/cases")
