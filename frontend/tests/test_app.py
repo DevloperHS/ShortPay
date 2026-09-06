@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from frontend import create_app
@@ -92,6 +94,29 @@ def test_shared_theme_markup(frontend_client, path):
     assert "localStorage.setItem('shortpay-theme', theme)" in html
     assert "window.Motion" not in html
     assert '<script src=' not in html
+
+
+def test_light_theme_overrides_every_shared_gradient(frontend_client):
+    client, _ = frontend_client
+    response = client.get("/static/styles.css")
+    assert response.status_code == 200
+    # This stylesheet uses flat rule blocks; check each shared gradient selector
+    # has an explicit solid light-theme background, including interaction states.
+    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", response.get_data(as_text=True))
+    light_backgrounds = set()
+    gradient_selectors = set()
+    prefix = ':root[data-theme="light"] '
+    for selectors, declarations in rules:
+        for selector in selectors.split(","):
+            selector = selector.strip()
+            if selector.startswith(prefix):
+                assert "gradient(" not in declarations
+                if "background:" in declarations:
+                    light_backgrounds.add(selector.removeprefix(prefix))
+            elif "gradient(" in declarations:
+                gradient_selectors.add(selector)
+    assert gradient_selectors
+    assert gradient_selectors <= light_backgrounds
 
 
 def test_case_detail_renders_locked_math(frontend_client):
