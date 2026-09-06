@@ -1,5 +1,5 @@
 from typing import Optional, List, Union, Literal, Tuple
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from shortpay.ledgers import LedgerJoin
 from shortpay.matching import MatchResult
 
@@ -47,6 +47,14 @@ class ApproveShortPay(BaseModel):
 class OverridePayAsBilled(BaseModel):
     override_reason: str
 
+    @field_validator("override_reason")
+    @classmethod
+    def require_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Override reason is required")
+        return value
+
 
 class AuditCase(BaseModel):
     case_key: CaseKey
@@ -54,6 +62,7 @@ class AuditCase(BaseModel):
     bill_of_lading: str
     match_result: MatchResult
     disposition: Disposition
+    policy_id: Optional[str] = None
 
     @property
     def is_terminal(self) -> bool:

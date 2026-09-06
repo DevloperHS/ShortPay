@@ -1,5 +1,5 @@
 from typing import List, Union, Optional
-from shortpay.evidence import InvoiceFact, ContractFact, FacilityFact, DockDwellFact
+from shortpay.evidence import InvoiceFact, ContractFact, FacilityFact, DockDwellFact, Mode
 from shortpay.case import (
     CaseKey,
     AuditCase,
@@ -11,7 +11,7 @@ from shortpay.case import (
     ApproveShortPay,
     OverridePayAsBilled,
 )
-from shortpay.matching import match_evidence
+from shortpay.matching import match_evidence, MatchResult
 from shortpay.store import InMemoryStore
 from shortpay.policy import LaneKey
 from shortpay.neatlogs import tracer, compute_evidence_hash
@@ -43,6 +43,8 @@ class AuditOffice:
             elif isinstance(fact, ContractFact):
                 self.store.contracts[fact.shipment_id] = fact
                 record_id = fact.shipment_id
+                if fact.mode not in (Mode.LTL, Mode.TL):
+                    self._save_out_of_scope_contract(fact)
             elif isinstance(fact, FacilityFact):
                 self.store.facilities[fact.shipment_id] = fact
                 record_id = fact.shipment_id
@@ -61,7 +63,31 @@ class AuditOffice:
                     source=source,
                 )
 
+    def _save_out_of_scope_contract(self, contract: ContractFact) -> AuditCase:
+        """Surface unsupported baseline rows without inventing invoice or dock facts."""
+        case = AuditCase(
+            case_key=CaseKey(
+                invoice_id=f"OUT-OF-SCOPE-{contract.shipment_id}",
+                shipment_id=contract.shipment_id,
+            ),
+            carrier_name=contract.carrier,
+            bill_of_lading=contract.bill_of_lading,
+            match_result=MatchResult(
+                is_out_of_scope=True,
+                skip_reason=f"Mode {contract.mode.value} is out of v1 scope",
+            ),
+            disposition=SkippedOutOfScope(
+                skip_reason=f"Mode {contract.mode.value} is out of v1 scope"
+            ),
+        )
+        self.store.save_case(case)
+        return case
+
     def match(self, case_key: CaseKey, *, emit_trace: bool = True) -> AuditCase:
+        existing_case = self.store.get_case(case_key)
+        if existing_case and existing_case.is_terminal:
+            return existing_case
+
         invoice = self.store.invoices.get(case_key.invoice_id)
         if not invoice:
             raise KeyError(f"Invoice {case_key.invoice_id} not found in store")
@@ -78,18 +104,13 @@ class AuditOffice:
         if match_res.is_out_of_scope:
             disposition = SkippedOutOfScope(skip_reason=match_res.skip_reason or "Out of scope")
         else:
-            lane_key = LaneKey(
-                carrier=contract.carrier,
-                mode=contract.mode,
-                destination_has_dock=facility.destination_has_dock,
-            )
-            policy = self.store.get_policy(lane_key)
+            policy = self.store.get_policy_for(contract, facility)
 
             # Check if auto-close applies
-            if (
-                match_res.dispute_total_cents <= policy.max_auto_close_dispute_cents
-                and policy.is_rule_approved("LIFTGATE_DOCK_PRESENT")
-                and policy.is_rule_approved("DETENTION_HOURS")
+            if policy.permits_auto_close(
+                dispute_cents=match_res.dispute_total_cents,
+                fired_rule_ids=match_res.fired_rule_ids,
+                has_unexplained_lines=match_res.has_unexplained_lines,
             ):
                 disposition = AutoClosed()
             else:
@@ -101,6 +122,7 @@ class AuditOffice:
             bill_of_lading=contract.bill_of_lading,
             match_result=match_res,
             disposition=disposition,
+            policy_id=policy.policy_id if not match_res.is_out_of_scope else None,
         )
         self.store.save_case(case)
 
@@ -112,11 +134,7 @@ class AuditOffice:
             "expected_total_cents": match_res.expected_total_cents,
         })
         trace_id = f"trace-freight-{case_key.shipment_id.lower()}"
-        rules_fired = [
-            f"{bl.charge_type.value}_OVERBILL"
-            for bl, el in match_res.lines
-            if bl.amount_cents > el.amount_cents
-        ]
+        rules_fired = match_res.fired_rule_ids
         if emit_trace:
             tracer.trace_match(
                 trace_id=trace_id,
@@ -137,6 +155,22 @@ class AuditOffice:
         if not case:
             case = self.match(case_key)
 
+        if case.is_terminal:
+            if (
+                isinstance(case.disposition, ShortPaid)
+                and isinstance(action, ApproveShortPay)
+                and action.expected_payable_cents
+                == case.disposition.approved_payable_cents
+            ):
+                return case
+            if (
+                isinstance(case.disposition, PaidAsBilled)
+                and isinstance(action, OverridePayAsBilled)
+                and action.override_reason == case.disposition.override_reason
+            ):
+                return case
+            raise ValueError("Only NeedsReview cases can be decided")
+
         if isinstance(action, ApproveShortPay):
             if action.expected_payable_cents != case.match_result.expected_total_cents:
                 raise StaleDecisionError(
@@ -147,14 +181,8 @@ class AuditOffice:
             contract = self.store.contracts.get(case_key.shipment_id)
             facility = self.store.facilities.get(case_key.shipment_id)
             if contract and facility:
-                lane_key = LaneKey(
-                    carrier=contract.carrier,
-                    mode=contract.mode,
-                    destination_has_dock=facility.destination_has_dock,
-                )
-                policy = self.store.get_policy(lane_key)
-                policy.record_approved_rule("LIFTGATE_DOCK_PRESENT")
-                policy.record_approved_rule("DETENTION_HOURS")
+                policy = self.store.get_policy_for(contract, facility)
+                policy.record_approved_rules(case.match_result.fired_rule_ids)
 
             new_disp = ShortPaid(approved_payable_cents=action.expected_payable_cents)
             payable_cents = action.expected_payable_cents
@@ -172,6 +200,7 @@ class AuditOffice:
             bill_of_lading=case.bill_of_lading,
             match_result=case.match_result,
             disposition=new_disp,
+            policy_id=case.policy_id,
         )
         self.store.save_case(updated_case)
 

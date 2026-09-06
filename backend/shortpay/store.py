@@ -18,6 +18,15 @@ class InMemoryStore:
             self.lane_policies[lane_key] = PolicyBook()
         return self.lane_policies[lane_key]
 
+    def get_policy_for(self, contract: ContractFact, facility: FacilityFact) -> PolicyBook:
+        return self.get_policy(
+            LaneKey(
+                carrier=contract.carrier,
+                mode=contract.mode,
+                destination_has_dock=facility.destination_has_dock,
+            )
+        )
+
     def save_case(self, case: AuditCase):
         self.cases[case.case_key] = case
 

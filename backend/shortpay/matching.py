@@ -1,5 +1,5 @@
 from typing import Optional, List, Tuple
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from shortpay.evidence import (
     InvoiceFact,
     ContractFact,
@@ -20,7 +20,9 @@ class MatchResult(BaseModel):
     billed_total_cents: int = 0
     expected_total_cents: int = 0
     dispute_total_cents: int = 0
-    lines: List[Tuple[BilledLine, ExpectedLine]] = []
+    fired_rule_ids: List[str] = Field(default_factory=list)
+    has_unexplained_lines: bool = False
+    lines: List[Tuple[BilledLine, ExpectedLine]] = Field(default_factory=list)
 
 
 def match_evidence(
@@ -50,6 +52,8 @@ def match_evidence(
 
     joined_lines: List[Tuple[BilledLine, ExpectedLine]] = []
     expected_sum = 0
+    fired_rule_ids: List[str] = []
+    has_unexplained_lines = False
 
     for line in invoice.lines:
         billed_line = BilledLine(
@@ -93,6 +97,7 @@ def match_evidence(
             )
         else:
             # Unexplained or OTHER line items
+            has_unexplained_lines = True
             expected_cents = 0
             exp_line = ExpectedLine(
                 charge_type=line.charge_type,
@@ -102,6 +107,15 @@ def match_evidence(
 
         expected_sum += expected_cents
         joined_lines.append((billed_line, exp_line))
+        if line.amount_cents > expected_cents:
+            rule_id = {
+                ChargeType.DETENTION: "DETENTION_HOURS",
+                ChargeType.LIFTGATE: "LIFTGATE_DOCK_PRESENT",
+                ChargeType.BASE_FREIGHT: "BASE_RATE_MISMATCH",
+                ChargeType.OTHER: "UNEXPLAINED_LINE",
+            }[line.charge_type]
+            if rule_id not in fired_rule_ids:
+                fired_rule_ids.append(rule_id)
 
     billed_sum = invoice.total_billed_cents
     dispute_sum = max(0, billed_sum - expected_sum)
@@ -114,5 +128,7 @@ def match_evidence(
         billed_total_cents=billed_sum,
         expected_total_cents=expected_sum,
         dispute_total_cents=dispute_sum,
+        fired_rule_ids=fired_rule_ids,
+        has_unexplained_lines=has_unexplained_lines,
         lines=joined_lines,
     )

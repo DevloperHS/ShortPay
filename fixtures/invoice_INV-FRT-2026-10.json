@@ -1,0 +1,19 @@
+{
+  "invoice_number": "INV-FRT-2026-10",
+  "shipment_id": "SHP-88221",
+  "carrier_name": "FedEx Freight",
+  "bill_of_lading": "BOL-US-99122",
+  "line_items": [
+    {
+      "description": "Standard LTL Transit",
+      "amount_cents": 85000,
+      "charge_type": "BASE_FREIGHT"
+    },
+    {
+      "description": "Liftgate Delivery Service",
+      "amount_cents": 3800,
+      "charge_type": "LIFTGATE"
+    }
+  ],
+  "total_billed_cents": 88800
+}

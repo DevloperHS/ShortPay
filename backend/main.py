@@ -3,7 +3,7 @@ from typing import List, Dict, Any
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from shortpay import AuditOffice, CaseKey, ApproveShortPay, OverridePayAsBilled
 from shortpay.adapters.baseline_csv import parse_baseline_csv
@@ -14,6 +14,8 @@ from shortpay.adapters.invoice_extract import (
     extract_invoice_with_fallback_details,
     parse_invoice_json,
 )
+from shortpay.adapters.erp_propose import build_dispute_packet, build_erp_proposal
+from shortpay.adapters.vault_hunter import discover_invoice_files
 from shortpay.neatlogs import tracer
 
 office = AuditOffice.in_memory()
@@ -25,7 +27,6 @@ def auto_ingest_fixtures():
     csv_path = os.path.join(fixtures_dir, "freight_audit_baseline.csv")
     dock_path = os.path.join(fixtures_dir, "dock_SHP-88220.json")
     facility_path = os.path.join(fixtures_dir, "facility_SHP-88220.json")
-    invoice_path = os.path.join(fixtures_dir, "invoice_INV-FRT-2026-09.json")
 
     if os.path.exists(csv_path):
         contracts = parse_baseline_csv(csv_path)
@@ -43,14 +44,17 @@ def auto_ingest_fixtures():
         facility = parse_facility_json(facility_path)
         office.ingest([facility], source="fixture:facility_master", emit_trace=False)
 
-    if os.path.exists(invoice_path):
-        invoice = parse_invoice_json(invoice_path)
+    for discovered in discover_invoice_files(fixtures_dir):
+        invoice = parse_invoice_json(discovered.path)
         office.ingest([invoice], source="fixture:invoice_json", emit_trace=False)
-        # Auto-match hero case
-        office.match(
-            CaseKey(invoice_id=invoice.invoice_id, shipment_id=invoice.shipment_id),
-            emit_trace=False,
-        )
+        try:
+            office.match(
+                CaseKey(invoice_id=invoice.invoice_id, shipment_id=invoice.shipment_id),
+                emit_trace=False,
+            )
+        except KeyError:
+            # The Hunter can discover an invoice before the remaining evidence arrives.
+            pass
 
 
 @asynccontextmanager
@@ -85,6 +89,13 @@ class DecideRequest(BaseModel):
     action_type: str  # "ApproveShortPay" or "OverridePayAsBilled"
     expected_payable_cents: int = 0
     override_reason: str = ""
+
+    @model_validator(mode="after")
+    def validate_override_reason(self):
+        if self.action_type == "OverridePayAsBilled" and not self.override_reason.strip():
+            raise ValueError("Override reason is required for OverridePayAsBilled")
+        self.override_reason = self.override_reason.strip()
+        return self
 
 
 class SponsorInvoiceIngestRequest(BaseModel):
@@ -162,6 +173,7 @@ def get_kanban_cases() -> List[Dict[str, Any]]:
         auto_ingest_fixtures()
         cases = office.cases()
 
+    cases = sorted(cases, key=lambda case: case.disposition.disposition_type == "SkippedOutOfScope")
     results = []
     for c in cases:
         disp_name = c.disposition.disposition_type
@@ -193,6 +205,8 @@ def get_kanban_cases() -> List[Dict[str, Any]]:
             "expected_cents": m.expected_total_cents,
             "dispute_cents": m.dispute_total_cents,
             "disposition": disp_name,
+            "skip_reason": getattr(c.disposition, "skip_reason", None),
+            "policy_id": c.policy_id,
             "kanban": {
                 "column": col,
                 "color": color,
@@ -237,6 +251,8 @@ def get_case_detail(invoice_id: str) -> Dict[str, Any]:
         "expected_cents": m.expected_total_cents,
         "dispute_cents": m.dispute_total_cents,
         "disposition": c.disposition.disposition_type,
+        "skip_reason": getattr(c.disposition, "skip_reason", None),
+        "policy_id": c.policy_id,
         "lines": lines_detail,
     }
 
@@ -273,6 +289,12 @@ def decide_action(req: DecideRequest):
             "approved_payable_cents": getattr(
                 updated_case.disposition, "approved_payable_cents", None
             ),
+            "erp_proposal": None,
+            "dispute_packet": None,
         }
+        erp_proposal = build_erp_proposal(updated_case)
+        if erp_proposal is not None:
+            response["erp_proposal"] = erp_proposal.model_dump()
+            response["dispute_packet"] = build_dispute_packet(updated_case).model_dump()
         workflow.set_output(response)
         return response

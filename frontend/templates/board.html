@@ -42,7 +42,7 @@
                 <span class="arrow">→</span>
               </div>
               <strong>{{ case.shipment_id }}</strong>
-              <p>{{ case.kanban.subtitle }}</p>
+              <p>{{ case.skip_reason or case.kanban.subtitle }}</p>
               <div class="case-money">
                 <span>Billed {{ case.billed_cents|money }}</span>
                 <span class="variance">{{ case.dispute_cents|money }} variance</span>
