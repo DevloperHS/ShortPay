@@ -8,6 +8,7 @@ Shortpay is the AP desk that audits carrier accessorials **before the money leav
 - **PRD Specification**: [docs/prd.md](docs/prd.md)
 - **Architecture**: [docs/architecture.md](docs/architecture.md)
 - **Sponsor Integration ADR**: [docs/adr/0003-pydantic-ai-and-sponsor-adapters.md](docs/adr/0003-pydantic-ai-and-sponsor-adapters.md)
+- **Project Writeup**: [Project Writeup](https://gist.github.com/DevloperHS/dbec4a1e1b12c0958b67013b8fcee8a4) 
 
 ---
 
@@ -146,13 +147,9 @@ The UI is available at `http://localhost:5000` and connects to the FastAPI backe
 - **Facts**:
   - Destination facility has standard loading dock (`destination_has_dock = True`) $\rightarrow$ Liftgate not authorized ($0.00). Billed $95.00.
   - Dock arrival `14:12`, departure `15:45` (93 minutes total dwell). Contract free time is 30 min $\rightarrow$ 63 min billable dwell $\rightarrow$ 1 completed hour at $75/hr $\rightarrow$ Authorized detention $75.00. Billed $175.00.
-- **Summary**:
+- **Summary**
   - Total Billed: **$1,120.00** (`112000`¢)
   - Authorized Payable: **$925.00** (`92500`¢)
   - Dispute Amount: **$195.00** (`19500`¢)
 
 ---
-
-## Repository description
-
-Evidence-backed freight invoice auditing with TensorMux/Groq extraction and deterministic integer-cent matching for accurate short-pay decisions.
